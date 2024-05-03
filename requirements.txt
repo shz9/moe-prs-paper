@@ -1,0 +1,12 @@
+viprs>=0.1
+magenpy>=0.1
+pytorch
+scikit-learn
+seaborn
+matplotlib
+scipy
+numpy
+pandas
+tqdm
+joblib
+onnxruntime
