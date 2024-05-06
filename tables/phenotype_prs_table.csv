@@ -7,10 +7,10 @@ Standing Height,HEIGHT,"EFO_0004339",PGS002805,PGS002805,AMR,
 Body Mass Index,BMI,"EFO_0004340",PGS002360,PGS002360,EAS,
 Body Mass Index,BMI,"EFO_0004340",PGS003843,PGS003843,EUR,
 Body Mass Index,BMI,"EFO_0004340",PGS003845,PGS003845,AFR,
-FEV1/FVC,FEV1/FVC,"EFO_0004713",PGS003862,PGS003862,EUR,
-FEV1/FVC,FEV1/FVC,"EFO_0004713",PGS003863,PGS003863,AFR,
-FEV1/FVC,FEV1/FVC,"EFO_0004713",PGS003864,PGS003864,AMR,
-FEV1/FVC,FEV1/FVC,"EFO_0004713",PGS003865,PGS003865,EAS,
+FEV1/FVC,FEV1_FVC,"EFO_0004713",PGS003862,PGS003862,EUR,
+FEV1/FVC,FEV1_FVC,"EFO_0004713",PGS003863,PGS003863,AFR,
+FEV1/FVC,FEV1_FVC,"EFO_0004713",PGS003864,PGS003864,AMR,
+FEV1/FVC,FEV1_FVC,"EFO_0004713",PGS003865,PGS003865,EAS,
 LDL Cholesterol,LDL,"EFO_0004611",PGS000886,PGS000886,AFR,
 LDL Cholesterol,LDL,"EFO_0004611",PGS000890,PGS000890,EAS,
 LDL Cholesterol,LDL,"EFO_0004611",PGS000892,PGS000892,EUR,
@@ -35,9 +35,9 @@ Type 2 Diabetes,T2D,"MONDO_0005148",PGS003732,PGS003732,AMR,
 Type 2 Diabetes,T2D,"MONDO_0005148",PGS003731,PGS003731,SAS,
 Asthma,ASTHMA,"MONDO_0004979",PGS002358,PGS002358,EAS,
 Asthma,ASTHMA,"MONDO_0004979",PGS002311,PGS002311,EUR,
-Testosterone,Testosterone,"EFO_0004908",TESTOSTERONE_M,,M,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-Testosterone,Testosterone,"EFO_0004908",TESTOSTERONE_F,,F,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-Urate,Urate,"EFO_0004531",URATE_M,,M,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-Urate,Urate,"EFO_0004531",URATE_F,,F,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-Creatinine,Creatinine,"EFO_0004518",CREATININE_M,,M,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-Creatinine,Creatinine,"EFO_0004518",CREATININE_F,,M,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+Testosterone,TST,"EFO_0004908",TST_M,,M,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+Testosterone,TST,"EFO_0004908",TST_F,,F,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+Urate,URT,"EFO_0004531",URT_M,,M,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+Urate,URT,"EFO_0004531",URT_F,,F,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+Creatinine,CRTN,"EFO_0004518",CRTN_M,,M,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+Creatinine,CRTN,"EFO_0004518",CRTN_F,,F,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"

@@ -7,6 +7,8 @@ import os.path as osp
 import pandas as pd
 import numpy as np
 import ast
+import sys
+sys.path.append(osp.dirname(osp.dirname(osp.dirname(__file__))))
 from data_preparation.utils import liftover_coordinates
 import argparse
 
@@ -38,7 +40,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser('Process the gnomad v3.1 PCA loadings.')
     parser.add_argument('--pca-loadings', dest='pca_loadings',
                         type=str, help='Path to the PCA loadings file.',
-                        default='data/gnomad_data/release_3.1_pca_gnomad.v3.1.pca_loadings.tsv.gz')
+                        default='data/gnomad_data/gnomad.v3.1.pca_loadings.tsv.gz')
     parser.add_argument('--output-dir', dest='output_dir',
                         type=str, help='Path to the output directory.',
                         default='data/gnomad_data/')
@@ -53,7 +55,7 @@ if __name__ == '__main__':
     # Save the processed dataframe to file:
     processed_pcl.to_csv(osp.join(args.output_dir, 'processed_pca_loadings_GRCh38.csv'), index=False)
     # Save bed files for genotype extraction:
-    processed_pcl[['CHR', 'POS', 'POS']].to_csv(osp.join(args.output_dir, 'gnomad_pca_snps_hg38.bed'),
+    processed_pcl[['CHR', 'POS', 'POS']].to_csv(osp.join(args.output_dir, 'gnomad_pca_snps_GRCh38.bed'),
                                                 sep="\t", index=False, header=False)
 
     # Liftover the coordinates from hg38 to hg19:
@@ -66,5 +68,5 @@ if __name__ == '__main__':
     # Save the processed dataframe to file:
     processed_pcl.to_csv(osp.join(args.output_dir, 'processed_pca_loadings_GRCh37.csv'), index=False)
     # Save bed files for genotype extraction:
-    processed_pcl[['CHR', 'POS', 'POS']].to_csv(osp.join(args.output_dir, 'gnomad_pca_snps_hg19.bed'),
+    processed_pcl[['CHR', 'POS', 'POS']].to_csv(osp.join(args.output_dir, 'gnomad_pca_snps_GRCh37.bed'),
                                                 sep="\t", index=False, header=False)

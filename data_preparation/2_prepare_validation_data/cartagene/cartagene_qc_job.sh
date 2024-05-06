@@ -18,7 +18,7 @@ snp_keep="data/snp_sets/GRCh38.bed"
 
 mkdir -p $"$OUTPUT_DIR"
 
-plink2 --vcf "$HOME/projects/ctb-sgravel/cartagene/flagship_project/processed_data/imputed_genotypes/chr${CHR}.vcf.gz" \
+plink2 --vcf "$HOME/projects/ctb-sgravel/cartagene/research/flagship_project/processed_data/imputed_genotypes/chr${CHR}.vcf.gz" \
       --make-bed \
       --allow-no-sex \
       --extract range "$snp_keep" \

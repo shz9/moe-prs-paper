@@ -1,6 +1,5 @@
 
 import os
-import numpy as np
 import pandas as pd
 from tqdm import tqdm
 
@@ -16,7 +15,7 @@ for _, row in tqdm(pgs_metadata.iterrows(), total=len(pgs_metadata),
     output_dir = f"data/pgs_weights/{phenotype}"
 
     # If the PGS Catalog ID is missing or NaN, skip the download
-    if row['PGSCatalog_ID'] is None or np.isnan(row['PGSCatalog_ID']):
+    if row['PGSCatalog_ID'] is None or pd.isna(row['PGSCatalog_ID']):
         continue
 
     os.system(f"python3 data_preparation/1_prepare_pgs_weights/download_pgs.py "

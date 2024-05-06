@@ -18,12 +18,17 @@ source env/moe/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 
+deactivate
+
 echo "========================================================"
 echo "Setting up environment for Hail..."
 
+rm -rf env/hail/
 python -m venv env/hail/
 source env/hail/bin/activate
 python -m pip install --upgrade pip
 python -m pip install hail
+
+deactivate
 
 echo "Done!"

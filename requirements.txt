@@ -1,6 +1,6 @@
 viprs>=0.1
 magenpy>=0.1
-pytorch
+torch
 scikit-learn
 seaborn
 matplotlib
@@ -10,3 +10,4 @@ pandas
 tqdm
 joblib
 onnxruntime
+liftover

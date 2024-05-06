@@ -1,5 +1,6 @@
 import pandas as pd
 import os.path as osp
+from magenpy.utils.system_utils import makedir
 import argparse
 import sys
 
@@ -27,10 +28,13 @@ inferred_beta.rename(columns={'CHR': 'chr_name', 'SNP': 'rsID', 'POS': 'chr_posi
 output_dir = osp.dirname(args.input_file)
 phenotype = osp.basename(output_dir)
 
-if 'female_all' in args.input_file:
-    output_file = osp.join(output_dir, 'GRCh37', f'{phenotype.upper()}_F.txt.gz')
+if f'{phenotype}/F_' in args.input_file:
+    output_file = osp.join(output_dir, 'GRCh37', f'{phenotype}_F.txt.gz')
 else:
-    output_file = osp.join(output_dir, 'GRCh37', f'{phenotype.upper()}_M.txt.gz')
+    output_file = osp.join(output_dir, 'GRCh37', f'{phenotype}_M.txt.gz')
+
+makedir(osp.dirname(output_file))
+makedir(osp.dirname(output_file.replace('GRCh37', 'GRCh38')))
 
 inferred_beta.to_csv(output_file, sep="\t", index=False)
 
