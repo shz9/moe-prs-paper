@@ -1,10 +1,9 @@
 import pandas as pd
 import glob
 from magenpy.utils.system_utils import makedir
-from tqdm import tqdm
 
 
-genome_builds = ['GRCh37'] #, 'GRCh38']
+genome_builds = ['GRCh37', 'GRCh38']
 
 for gb in genome_builds:
 
@@ -12,26 +11,25 @@ for gb in genome_builds:
 
     # Loop over all the scoring files and extract the SNP positions from them:
     # We want a union of all the SNP positions:
-    pgs_files = glob.glob(f"data/pgs_weights/*/{gb}/*.txt.gz")
-    for f in tqdm(pgs_files, total=len(pgs_files), desc=f"Reading {gb} PGS files"):
+    for f in glob.glob(f"data/pgs_weights/*/{gb}/*.txt.gz"):
 
-        df = pd.read_csv(f, sep="\t", comment='#', compression='gzip')
+        df = pd.read_csv(f, sep="\t", compression='gzip')
 
         if df_gb is None:
-            df_gb = df[['rsID']].copy()
+            df_gb = df[['chr_name', 'chr_position']].copy()
         else:
-            df_gb = df_gb.merge(df[['rsID']], how='outer')
+            df_gb = df_gb.merge(df[['chr_name', 'chr_position']], how='outer')
 
     # Read the gnomad PC coordinates for the current genome build:
-    gnomad_pc_coord = pd.read_csv(f"data/gnomad_data/gnomad.v3.1.pca_loadings_annotated.tsv.gz",
-                                  sep="\t")
+    gnomad_pc_coord = pd.read_csv(f"data/gnomad_data/gnomad_pca_snps_{gb}.bed",
+                                  sep="\t", header=None, usecols=[0, 1])
+    gnomad_pc_coord.columns = ['chr_name', 'chr_position']
 
     # Merge the gnomad PC coordinates with the SNP positions from the scoring files:
-    df_gb = df_gb.merge(gnomad_pc_coord[['rsid']], how='outer')
+    df_gb = df_gb.merge(gnomad_pc_coord, how='outer')
 
-    print(f"> Total number of unique SNPs: {len(df_gb)}")
+    print(f"> Total number of unique SNPs / SNP positions: {len(df_gb)}")
 
-    makedir("data/keep_files/")
+    makedir(f"data/snp_sets/")
     # Save the merged SNP positions to file:
-    df_gb.to_csv(f"data/keep_files/scoring_snps.txt",
-                 sep="\t", index=False, header=False)
+    df_gb.to_csv(f"data/snp_sets/{gb}.bed", sep="\t", index=False, header=False)

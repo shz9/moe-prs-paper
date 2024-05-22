@@ -14,14 +14,14 @@ module load plink
 
 CHR=${1:-22}  # Chromosome number (default 22)
 OUTPUT_DIR=${2:-"data/cartagene_qc_genotypes"}
-snp_keep="data/keep_files/scoring_snps.txt"
+snp_keep="data/snp_sets/GRCh37.bed"
 
 mkdir -p $"$OUTPUT_DIR"
 
 plink2 --vcf "$HOME/projects/ctb-sgravel/cartagene/research/flagship_project/processed_data/imputed_genotypes/chr${CHR}.vcf.gz" \
       --make-bed \
       --allow-no-sex \
-      --extract "$snp_keep" \
+      --extract range "$snp_keep" \
       --hard-call-threshold 0.1 \
       --out "$OUTPUT_DIR/chr_${CHR}"
 

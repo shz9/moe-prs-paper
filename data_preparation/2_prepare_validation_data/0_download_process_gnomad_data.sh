@@ -17,7 +17,7 @@ gsutil -o GSUtil:parallel_process_count=1 -m cp -r \
 module load java/11
 source env/moe/bin/activate
 
-#python3 data_preparation/2_prepare_validation_data/postprocess_gnomad_pc_loadings.py
+python3 data_preparation/2_prepare_validation_data/postprocess_gnomad_pc_loadings.py
 python3 data_preparation/2_prepare_validation_data/annotate_gnomad_pc_loadings.py
 
 # Download hail liftover chain files:
