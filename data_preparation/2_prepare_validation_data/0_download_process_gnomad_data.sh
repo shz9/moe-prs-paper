@@ -14,9 +14,11 @@ gsutil -o GSUtil:parallel_process_count=1 -m cp -r \
   ./data/gnomad_data/
 
 # Process the coordinates of the SNPs in the loadings files and make them available for as BED files:
+module load java/11
 source env/moe/bin/activate
 
-python3 data_preparation/2_prepare_validation_data/process_gnomad_pc_loadings.py
+#python3 data_preparation/2_prepare_validation_data/postprocess_gnomad_pc_loadings.py
+python3 data_preparation/2_prepare_validation_data/annotate_gnomad_pc_loadings.py
 
 # Download hail liftover chain files:
 gsutil -m cp gs://hail-common/references/grch37_to_grch38.over.chain.gz ./data/hail_data/

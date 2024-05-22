@@ -20,6 +20,6 @@ for _, row in tqdm(pgs_metadata.iterrows(), total=len(pgs_metadata),
 
     os.system(f"python3 data_preparation/1_prepare_pgs_weights/download_pgs.py "
               f"--pgs-id {row['PGSCatalog_ID']} --output-dir {output_dir}")
-    os.system(f"python3 data_preparation/1_prepare_pgs_weights/download_pgs.py "
-              f"--pgs-id {row['PGSCatalog_ID']} --output-dir {output_dir} --genome-build GRCh38")
+    #os.system(f"python3 data_preparation/1_prepare_pgs_weights/download_pgs.py "
+    #          f"--pgs-id {row['PGSCatalog_ID']} --output-dir {output_dir} --genome-build GRCh38")
 

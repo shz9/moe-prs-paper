@@ -22,7 +22,6 @@ ind_list = pd.read_csv("/lustre03/project/6004777/projects/uk_biobank/lists/ukb_
 # Apply the standard filters:
 
 ind_list = ind_list.loc[(ind_list['IID'] > 0) &  # Remove redacted samples
-                        (ind_list['used.in.pca.calculation'] == 1) &  # Keep samples used in PCA calculation
                         (ind_list['excess.relatives'] == 0) &  # Remove samples with excess relatives
                         (ind_list['putative.sex.chromosome.aneuploidy'] == 0),  # Remove samples with sex chr aneuploidy
                         ['FID', 'IID', 'Inferred.Gender'] +

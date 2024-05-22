@@ -16,8 +16,8 @@ do
               --output-dir "data/pgs_weights/${phenotype}/" \
               --output-file-prefix "${stratum}_"
     python3 data_preparation/1_prepare_pgs_weights/prepare_sex_biased_pgs/harmonize_inferred_beta.py \
-            --input-file "data/pgs_weights/${phenotype}/${stratum}_VIPRS_EM.fit.gz" \
-            --lift-over
+            --input-file "data/pgs_weights/${phenotype}/${stratum}_VIPRS_EM.fit.gz" #\
+            #--lift-over
     rm -rf "data/pgs_weights/${phenotype}/${stratum}_VIPRS_EM.fit.gz"
   done
 done

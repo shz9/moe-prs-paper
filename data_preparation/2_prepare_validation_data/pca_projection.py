@@ -122,6 +122,8 @@ if __name__ == '__main__':
                         help='The genome build used to generate the genotypes in the BED files.')
     parser.add_argument('--pca-loadings', dest='pca_loadings', type=str, required=True,
                         help='The path to the file containing the PC loadings from gnomad v3.1.')
+    parser.add_argument('--covar-file', dest='covar_file', type=str,
+                        help="The current covariates file to which to add the projected PCs")
     parser.add_argument('--pca-ref-genome', dest='pca_ref_genome',
                         type=str, default='GRCh38',
                         choices={'GRCh37', 'GRCh38'},
@@ -144,8 +146,21 @@ if __name__ == '__main__':
 
     # Save the projected PCs to file
     makedir(args.output_dir)
-    sample_pcs.to_csv(osp.join(args.output_dir, f"projected_sample_pcs.txt"),
+    sample_pcs.to_csv(osp.join(args.output_dir, f"gnomad_proj_sample_pcs.txt"),
                       sep="\t", index=False)
+
+    # Given the new PCs, write a new covariates file that contains the gnomad PCs instead of in-sample PCs:
+
+    if args.cover_file is not None:
+        covar_df = pd.read_csv(args.cover_file, sep="\t",
+                               names=['FID', 'IID', 'Sex'] + ['PC' + str(i + 1) for i in range(10)] + ['Age'])
+        sample_pcs['FID'] = 0
+
+        covar_df = covar_df.merge(sample_pcs, on=['FID', 'IID'])
+
+        covar_df[['FID', 'IID', 'Sex'] + [f'PC_{i}' for i in range(1, 11)] + ['Age']].to_csv(
+            osp.join(osp.dirname(args.cover_file), "covars_gnomad_pcs.txt"),
+            sep="\t", header=False, index=False)
 
     # --------------------------------------------------------------------------------------------
     # Clustering and generating population labels:
@@ -161,4 +176,4 @@ if __name__ == '__main__':
     print(ancestry_probs.groupby('ancestry').size())
 
     # Save the ancestry probabilities to file
-    ancestry_probs.to_csv(osp.join(args.output_dir, "ancestry_assignments.txt"), sep="\t", index=False)
+    ancestry_probs.to_csv(osp.join(args.output_dir, "gnomad_ancestry_assignments.txt"), sep="\t", index=False)

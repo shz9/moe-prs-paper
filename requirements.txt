@@ -9,5 +9,4 @@ numpy
 pandas
 tqdm
 joblib
-onnxruntime
 liftover

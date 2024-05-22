@@ -1,4 +1,7 @@
 """
+
+DEPRECATED (NOT USED ANYMORE)
+
 PC loadings & Random forest model were downloaded from gnomad v3.1:
 https://console.cloud.google.com/storage/browser/_details/gcp-public-data--gnomad/release/3.1/pca/
 """

@@ -17,7 +17,7 @@ UKBB_GENOTYPE_DIR="/lustre03/project/6004777/projects/uk_biobank/imputed_data/fu
 CHR=${1:-22}  # Chromosome number (default 22)
 ind_keep_file=${2-"data/keep_files/ukbb_qc_individuals.keep"}
 output_dir=${3-"data/ukbb_qc_genotypes"}
-snp_keep="data/snp_sets/GRCh37.bed"
+snp_keep="data/keep_files/scoring_snps.txt"
 
 
 mkdir -p "$output_dir"
@@ -27,7 +27,7 @@ plink2 --bgen "$UKBB_GENOTYPE_DIR/ukb_imp_chr${CHR}_v3.bgen" ref-first \
       --make-bed \
       --allow-no-sex \
       --keep "$ind_keep_file" \
-      --extract range "$snp_keep" \
+      --extract "$snp_keep" \
       --hard-call-threshold "0.1" \
       --out "$output_dir/chr_${CHR}"
 

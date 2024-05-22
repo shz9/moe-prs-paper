@@ -34,8 +34,6 @@ else:
     output_file = osp.join(output_dir, 'GRCh37', f'{phenotype}_M.txt.gz')
 
 makedir(osp.dirname(output_file))
-makedir(osp.dirname(output_file.replace('GRCh37', 'GRCh38')))
-
 inferred_beta.to_csv(output_file, sep="\t", index=False)
 
 if args.lift_over:
@@ -50,4 +48,5 @@ if args.lift_over:
     # print number of variants that could not be lifted over:
     print(f"Number of variants that could not be lifted over: {(inferred_beta['chr_position'] == -1).sum()}")
     inferred_beta = inferred_beta.loc[inferred_beta['chr_position'] != -1]
+    makedir(osp.dirname(output_file.replace('GRCh37', 'GRCh38')))
     inferred_beta.to_csv(output_file.replace('GRCh37', 'GRCh38'), sep="\t", index=False)

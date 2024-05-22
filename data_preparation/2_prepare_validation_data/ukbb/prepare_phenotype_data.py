@@ -44,35 +44,35 @@ makedir("data/phenotypes/ukbb/")
 sh = pheno_df[['FID', 'IID', '50-0.0']]
 sh.columns = ['FID', 'IID', 'phenotype']
 sh['phenotype'] = np.where(detect_outliers(sh['phenotype'], stratify=pheno_df['Sex']), np.nan, sh['phenotype'])
-sh.to_csv("data/phenotypes/ukbb/EFO_0004339.txt", sep="\t", index=False, header=False, na_rep='NA')
+sh.to_csv("data/phenotypes/ukbb/HEIGHT.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # BMI:
 
 bmi = pheno_df[['FID', 'IID', '21001-0.0']]
 bmi.columns = ['FID', 'IID', 'phenotype']
 bmi['phenotype'] = np.where(detect_outliers(np.log(bmi['phenotype']), stratify=pheno_df['Sex']), np.nan, bmi['phenotype'])
-bmi.to_csv("data/phenotypes/ukbb/EFO_0004340.txt", sep="\t", index=False, header=False, na_rep='NA')
+bmi.to_csv("data/phenotypes/ukbb/BMI.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # HDL:
 
 hdl = pheno_df[['FID', 'IID', '30760-0.0']]
 hdl.columns = ['FID', 'IID', 'phenotype']
 hdl['phenotype'] = np.where(detect_outliers(np.log(hdl['phenotype']), stratify=pheno_df['Sex']), np.nan, hdl['phenotype'])
-hdl.to_csv("data/phenotypes/ukbb/EFO_0004612.txt", sep="\t", index=False, header=False, na_rep='NA')
+hdl.to_csv("data/phenotypes/ukbb/HDL.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # LDL:
 
 ldl = pheno_df[['FID', 'IID', '30780-0.0']]
 ldl.columns = ['FID', 'IID', 'phenotype']
 ldl['phenotype'] = np.where(detect_outliers(ldl['phenotype'], stratify=pheno_df['Sex']), np.nan, ldl['phenotype'])
-ldl.to_csv("data/phenotypes/ukbb/EFO_0004611.txt", sep="\t", index=False, header=False, na_rep='NA')
+ldl.to_csv("data/phenotypes/ukbb/LDL.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # Total cholesterol:
 
 total_chol = pheno_df[['FID', 'IID', '30690-0.0']]
 total_chol.columns = ['FID', 'IID', 'phenotype']
 total_chol['phenotype'] = np.where(detect_outliers(total_chol['phenotype'], stratify=pheno_df['Sex']), np.nan, total_chol['phenotype'])
-total_chol.to_csv("data/phenotypes/ukbb/EFO_0004574.txt",
+total_chol.to_csv("data/phenotypes/ukbb/TC.txt",
                   sep="\t", index=False, header=False, na_rep='NA')
 
 # Log triglycerides:
@@ -81,7 +81,7 @@ log_trig = pheno_df[['FID', 'IID', '30870-0.0']]
 log_trig.columns = ['FID', 'IID', 'phenotype']
 log_trig['phenotype'] = np.log(log_trig['phenotype'])
 log_trig['phenotype'] = np.where(detect_outliers(log_trig['phenotype'], stratify=pheno_df['Sex']), np.nan, log_trig['phenotype'])
-log_trig.to_csv("data/phenotypes/ukbb/EFO_0004530.txt",
+log_trig.to_csv("data/phenotypes/ukbb/LOG_TG.txt",
                 sep="\t", index=False, header=False, na_rep='NA')
 
 # FVC:
@@ -105,7 +105,7 @@ fev1_fvc['phenotype'] = fev1_fvc['phenotype_fev1'] / fev1_fvc['phenotype_fvc']
 fev1_fvc.drop(['phenotype_fev1', 'phenotype_fvc'], axis=1, inplace=True)
 fev1_fvc['phenotype'] = np.where(detect_outliers(np.log(fev1_fvc['phenotype']), stratify=pheno_df['Sex']),
                                  np.nan, fev1_fvc['phenotype'])
-fev1_fvc.to_csv("data/phenotypes/ukbb/EFO_0004713.txt", sep="\t", index=False, header=False, na_rep='NA')
+fev1_fvc.to_csv("data/phenotypes/ukbb/FEV1_FVC.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # =============================================================================
 # Process sex-biased phenotypes
@@ -116,7 +116,7 @@ creatinine = pheno_df[['FID', 'IID', '30700-0.0']]
 creatinine.columns = ['FID', 'IID', 'phenotype']
 creatinine['phenotype'] = np.where(detect_outliers(creatinine['phenotype'], stratify=pheno_df['Sex']),
                                    np.nan, creatinine['phenotype'])
-creatinine.to_csv("data/phenotypes/ukbb/EFO_0004518.txt",
+creatinine.to_csv("data/phenotypes/ukbb/CRTN.txt",
                   sep="\t", index=False, header=False, na_rep='NA')
 
 # Urate
@@ -125,7 +125,7 @@ urate = pheno_df[['FID', 'IID', '30880-0.0']]
 urate.columns = ['FID', 'IID', 'phenotype']
 urate['phenotype'] = np.where(detect_outliers(urate['phenotype'], stratify=pheno_df['Sex']),
                               np.nan, urate['phenotype'])
-urate.to_csv("data/phenotypes/ukbb/EFO_0004531.txt",
+urate.to_csv("data/phenotypes/ukbb/URT.txt",
              sep="\t", index=False, header=False, na_rep='NA')
 
 # Testosterone
@@ -134,7 +134,7 @@ testosterone = pheno_df[['FID', 'IID', '30850-0.0']]
 testosterone.columns = ['FID', 'IID', 'phenotype']
 testosterone['phenotype'] = np.where(detect_outliers(testosterone['phenotype'], stratify=pheno_df['Sex']),
                                      np.nan, testosterone['phenotype'])
-testosterone.to_csv("data/phenotypes/ukbb/EFO_0004908.txt",
+testosterone.to_csv("data/phenotypes/ukbb/TST.txt",
                     sep="\t", index=False, header=False, na_rep='NA')
 
 # =============================================================================
@@ -181,7 +181,7 @@ asthma_df.values[asthma_like_idx, -1] = -9
 asthma_df.values[asthma_idx, -1] = 1
 
 asthma_df = asthma_df.loc[asthma_df['phenotype'] != -9]
-asthma_df.to_csv("data/phenotypes/ukbb/MONDO_0004979.txt", sep="\t", index=False, header=False, na_rep='NA')
+asthma_df.to_csv("data/phenotypes/ukbb/ASTHMA.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # ------------------ T1D & T2D ------------------
 
@@ -221,4 +221,4 @@ t2d_df.values[t2d_idx, -1] = 1
 t2d_df.values[t1d_idx, -1] = -9
 
 t2d_df = t2d_df.loc[t2d_df['phenotype'] != -9]
-t2d_df.to_csv("data/phenotypes/ukbb/MONDO_0005148.txt", sep="\t", index=False, header=False, na_rep='NA')
+t2d_df.to_csv("data/phenotypes/ukbb/T2D.txt", sep="\t", index=False, header=False, na_rep='NA')
