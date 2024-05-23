@@ -19,9 +19,17 @@ for gb in genome_builds:
 
         if 'hm_pos' in df.columns:
             df = df[['hm_chr', 'hm_pos']].copy().rename(columns={'hm_chr': 'chr_name', 'hm_pos': 'chr_position'})
-            df.dropna()
+            df.dropna(inplace=True)
+
+            # Filter to only autosomes:
+            transform_chr = df['chr_name'].apply(lambda x: str(int(float(x)))
+                if str(x).replace('.', '', 1).isdigit() else x
+            )
+            df = df.loc[transform_chr.isin(list(map(str, range(1, 23))))]
+
+            # Cast to integers:
             df['chr_position'] = df['chr_position'].astype(int)
-            df['chr_name'] = df['chr_name'].astype(str)
+            df['chr_name'] = df['chr_name'].astype(int)
         else:
             df = df[['chr_name', 'chr_position']].copy()
 

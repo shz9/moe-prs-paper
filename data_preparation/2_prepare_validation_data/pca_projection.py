@@ -75,6 +75,9 @@ def project_samples_hail(bed_files,
     pc_df['IID'] = mt.cols().s.collect()
     pc_df['FID'] = mt.cols().fam_id.collect()
 
+    if pc_df['FID'].isna().all():
+        pc_df['FID'] = 0
+
     return pc_df
 
 
@@ -136,7 +139,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    hl.init(spark_conf={'spark.driver.memory': '50g', 'spark.executor.memory': '50g'})
+    hl.init(spark_conf={'spark.driver.memory': '100g', 'spark.executor.memory': '100g'})
 
     # Project the samples onto the PC loadings
     sample_pcs = project_samples_hail(args.bed_files,
@@ -151,15 +154,18 @@ if __name__ == '__main__':
 
     # Given the new PCs, write a new covariates file that contains the gnomad PCs instead of in-sample PCs:
 
-    if args.cover_file is not None:
-        covar_df = pd.read_csv(args.cover_file, sep="\t",
+    if args.covar_file is not None:
+        covar_df = pd.read_csv(args.covar_file, sep="\t",
                                names=['FID', 'IID', 'Sex'] + ['PC' + str(i + 1) for i in range(10)] + ['Age'])
         sample_pcs['FID'] = 0
+
+        covar_df['IID'] = covar_df['IID'].astype(sample_pcs['IID'].dtype)
+        covar_df['FID'] = covar_df['FID'].astype(sample_pcs['FID'].dtype)
 
         covar_df = covar_df.merge(sample_pcs, on=['FID', 'IID'])
 
         covar_df[['FID', 'IID', 'Sex'] + [f'PC_{i}' for i in range(1, 11)] + ['Age']].to_csv(
-            osp.join(osp.dirname(args.cover_file), "covars_gnomad_pcs.txt"),
+            osp.join(osp.dirname(args.covar_file), "covars_gnomad_pcs.txt"),
             sep="\t", header=False, index=False)
 
     # --------------------------------------------------------------------------------------------

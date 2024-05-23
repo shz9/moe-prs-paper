@@ -12,16 +12,15 @@ import numpy as np
 
 def read_combine_pgs_files(pgs_dir, ref_genotype_dir, add_random_beta=False):
 
-    ukb_snp_table = pd.concat([parse_bim_file(f) 
-                               for f in glob.glob(osp.join(ref_genotype_dir, "*.bim"))])
+    snp_table = pd.concat([parse_bim_file(f)
+                           for f in glob.glob(osp.join(ref_genotype_dir, "*.bim"))])
 
-    new_table = ukb_snp_table.copy()
+    new_table = snp_table.copy()
     pgs_ids = []
 
     for i, pgs_file in enumerate(glob.glob(osp.join(pgs_dir, "*.txt.gz"))):
     
         col_map = {
-            'chr_name': 'CHR',
             'effect_allele': 'A1',
             'other_allele': 'A2'
         }
@@ -32,17 +31,25 @@ def read_combine_pgs_files(pgs_dir, ref_genotype_dir, add_random_beta=False):
         df = pd.read_csv(pgs_file, comment='#', sep="\t")
 
         if 'hm_pos' in df.columns:
-            col_map.update({'hm_pos': 'POS'})
+            col_map.update({'hm_pos': 'POS',
+                            'hm_chr': 'CHR'})
         else:
-            col_map.update({'chr_position': 'POS'})
+            col_map.update({'chr_position': 'POS',
+                            'chr_name': 'CHR'})
 
         col_map.update({'effect_weight': f'BETA_{i}'})
 
         df.rename(columns=col_map, inplace=True)
 
-        if df['CHR'].dtype == object:
-            df = df.loc[~df['CHR'].isin(['X', 'Y', 'XY', 'MT']),]
-            df['CHR'] = df['CHR'].astype(np.int32)
+        # Drop variants with no chromosome or position information:
+        df.dropna(subset=['CHR', 'POS'], inplace=True)
+
+        # Filter to only autosomes:
+        transform_chr = df['CHR'].apply(lambda x: str(int(float(x)))
+            if str(x).replace('.', '', 1).isdigit() else x
+        )
+        df = df.loc[transform_chr.isin(list(map(str, range(1, 23))))]
+        df['CHR'] = df['CHR'].astype(np.int32)
     
         df = merge_snp_tables(new_table,
                               df[['CHR', 'POS', 'A1', 'A2', f'BETA_{i}']],

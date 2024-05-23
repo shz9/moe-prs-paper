@@ -22,10 +22,6 @@ deactivate
 echo "========================================================"
 echo "Setting up environment for Hail..."
 
-module load StdEnv/2020
-module load python/3.8
-python --version
-
 rm -rf env/hail/
 python -m venv env/hail/
 source env/hail/bin/activate
