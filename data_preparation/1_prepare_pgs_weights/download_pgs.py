@@ -25,10 +25,7 @@ def download_pgs_from_catalog(pgs_id, data_dir=None, genome_build='GRCh37'):
     # If the genome build for the variants is specified as `genome_build`, download the default scoring file.
     # Otherwise, download the harmonized scoring file from the PGS catalog.
 
-    if pgs_info["variants_genomebuild"] == genome_build:
-        ftp_link = pgs_info["ftp_scoring_file"]
-    else:
-        ftp_link = pgs_info["ftp_harmonized_scoring_files"][genome_build]["positions"]
+    ftp_link = pgs_info["ftp_harmonized_scoring_files"][genome_build]["positions"]
 
     print(ftp_link)
 

@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import argparse
 import os.path as osp
+from magenpy.utils.system_utils import makedir
 
 
 parser = argparse.ArgumentParser(description='Extract covariates from the Cartagene files')
@@ -29,6 +30,8 @@ pheno_df['Sex'] = np.abs(pheno_df['Sex'] - 1)  # For consistency with other data
 merged_df = pc_df.merge(pheno_df, on='IID')
 merged_df = merged_df[['FID', 'IID', 'Sex'] + [f'PC{i+1}' for i in range(len(pc_df.columns) - 2)] + ['Age']]
 merged_df['FID'] = 0
+
+makedir("data/covariates/cartagene/")
 merged_df.to_csv("data/covariates/cartagene/covars_cartagene_pcs.txt",
                  sep="\t", index=False, header=False)
 

@@ -26,6 +26,7 @@ plink2 --bgen "$UKBB_GENOTYPE_DIR/ukb_imp_chr${CHR}_v3.bgen" ref-first \
       --sample "$UKBB_GENOTYPE_DIR/ukb6728_imp_chr${CHR}_v3_s487395.sample" \
       --make-bed \
       --allow-no-sex \
+      --max-alleles 2 \
       --keep "$ind_keep_file" \
       --extract range "$snp_keep" \
       --hard-call-threshold "0.1" \

@@ -41,35 +41,35 @@ makedir("data/phenotypes/ukbb/")
 
 # Standing height:
 
-sh = pheno_df[['FID', 'IID', '50-0.0']]
+sh = pheno_df[['FID', 'IID', '50-0.0']].copy()
 sh.columns = ['FID', 'IID', 'phenotype']
 sh['phenotype'] = np.where(detect_outliers(sh['phenotype'], stratify=pheno_df['Sex']), np.nan, sh['phenotype'])
 sh.to_csv("data/phenotypes/ukbb/HEIGHT.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # BMI:
 
-bmi = pheno_df[['FID', 'IID', '21001-0.0']]
+bmi = pheno_df[['FID', 'IID', '21001-0.0']].copy()
 bmi.columns = ['FID', 'IID', 'phenotype']
 bmi['phenotype'] = np.where(detect_outliers(np.log(bmi['phenotype']), stratify=pheno_df['Sex']), np.nan, bmi['phenotype'])
 bmi.to_csv("data/phenotypes/ukbb/BMI.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # HDL:
 
-hdl = pheno_df[['FID', 'IID', '30760-0.0']]
+hdl = pheno_df[['FID', 'IID', '30760-0.0']].copy()
 hdl.columns = ['FID', 'IID', 'phenotype']
 hdl['phenotype'] = np.where(detect_outliers(np.log(hdl['phenotype']), stratify=pheno_df['Sex']), np.nan, hdl['phenotype'])
 hdl.to_csv("data/phenotypes/ukbb/HDL.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # LDL:
 
-ldl = pheno_df[['FID', 'IID', '30780-0.0']]
+ldl = pheno_df[['FID', 'IID', '30780-0.0']].copy()
 ldl.columns = ['FID', 'IID', 'phenotype']
 ldl['phenotype'] = np.where(detect_outliers(ldl['phenotype'], stratify=pheno_df['Sex']), np.nan, ldl['phenotype'])
 ldl.to_csv("data/phenotypes/ukbb/LDL.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # Total cholesterol:
 
-total_chol = pheno_df[['FID', 'IID', '30690-0.0']]
+total_chol = pheno_df[['FID', 'IID', '30690-0.0']].copy()
 total_chol.columns = ['FID', 'IID', 'phenotype']
 total_chol['phenotype'] = np.where(detect_outliers(total_chol['phenotype'], stratify=pheno_df['Sex']), np.nan, total_chol['phenotype'])
 total_chol.to_csv("data/phenotypes/ukbb/TC.txt",
@@ -77,7 +77,7 @@ total_chol.to_csv("data/phenotypes/ukbb/TC.txt",
 
 # Log triglycerides:
 
-log_trig = pheno_df[['FID', 'IID', '30870-0.0']]
+log_trig = pheno_df[['FID', 'IID', '30870-0.0']].copy()
 log_trig.columns = ['FID', 'IID', 'phenotype']
 log_trig['phenotype'] = np.log(log_trig['phenotype'])
 log_trig['phenotype'] = np.where(detect_outliers(log_trig['phenotype'], stratify=pheno_df['Sex']), np.nan, log_trig['phenotype'])
@@ -86,14 +86,14 @@ log_trig.to_csv("data/phenotypes/ukbb/LOG_TG.txt",
 
 # FVC:
 
-fvc = pheno_df[['FID', 'IID', '3062-0.0']]
+fvc = pheno_df[['FID', 'IID', '3062-0.0']].copy()
 fvc.columns = ['FID', 'IID', 'phenotype']
 fvc['phenotype'] = np.where(detect_outliers(np.log(fvc['phenotype']), stratify=pheno_df['Sex']), np.nan, fvc['phenotype'])
 # fvc.to_csv("data/phenotypes/ukbb/FVC.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # FEV1
 
-fev1 = pheno_df[['FID', 'IID', '3063-0.0']]
+fev1 = pheno_df[['FID', 'IID', '3063-0.0']].copy()
 fev1.columns = ['FID', 'IID', 'phenotype']
 fev1['phenotype'] = np.where(detect_outliers(np.log(fev1['phenotype']), stratify=pheno_df['Sex']), np.nan, fev1['phenotype'])
 # fev1.to_csv("data/phenotypes/ukbb/FEV1.txt", sep="\t", index=False, header=False, na_rep='NA')
@@ -112,7 +112,7 @@ fev1_fvc.to_csv("data/phenotypes/ukbb/FEV1_FVC.txt", sep="\t", index=False, head
 
 # Creatinine
 
-creatinine = pheno_df[['FID', 'IID', '30700-0.0']]
+creatinine = pheno_df[['FID', 'IID', '30700-0.0']].copy()
 creatinine.columns = ['FID', 'IID', 'phenotype']
 creatinine['phenotype'] = np.where(detect_outliers(creatinine['phenotype'], stratify=pheno_df['Sex']),
                                    np.nan, creatinine['phenotype'])
@@ -121,7 +121,7 @@ creatinine.to_csv("data/phenotypes/ukbb/CRTN.txt",
 
 # Urate
 
-urate = pheno_df[['FID', 'IID', '30880-0.0']]
+urate = pheno_df[['FID', 'IID', '30880-0.0']].copy()
 urate.columns = ['FID', 'IID', 'phenotype']
 urate['phenotype'] = np.where(detect_outliers(urate['phenotype'], stratify=pheno_df['Sex']),
                               np.nan, urate['phenotype'])
@@ -130,7 +130,7 @@ urate.to_csv("data/phenotypes/ukbb/URT.txt",
 
 # Testosterone
 
-testosterone = pheno_df[['FID', 'IID', '30850-0.0']]
+testosterone = pheno_df[['FID', 'IID', '30850-0.0']].copy()
 testosterone.columns = ['FID', 'IID', 'phenotype']
 testosterone['phenotype'] = np.where(detect_outliers(testosterone['phenotype'], stratify=pheno_df['Sex']),
                                      np.nan, testosterone['phenotype'])
