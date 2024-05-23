@@ -41,12 +41,14 @@ if args.lift_over:
     sys.path.append(osp.dirname(osp.dirname(osp.dirname(__file__))))
     from utils import liftover_coordinates
 
-    inferred_beta['chr_position'] = liftover_coordinates(inferred_beta,
-                                                         chr_col='chr_name',
-                                                         pos_col='chr_position')
+    inferred_beta['chr_name'], inferred_beta['chr_position'] = liftover_coordinates(inferred_beta,
+                                                                                    chr_col='chr_name',
+                                                                                    pos_col='chr_position')
+
+    variants_to_drop = inferred_beta['chr_position'] == -1
 
     # print number of variants that could not be lifted over:
-    print(f"Number of variants that could not be lifted over: {(inferred_beta['chr_position'] == -1).sum()}")
-    inferred_beta = inferred_beta.loc[inferred_beta['chr_position'] != -1]
+    print(f"Number of variants that could not be lifted over: {variants_to_drop.sum()}")
+    inferred_beta = inferred_beta.loc[~variants_to_drop]
     makedir(osp.dirname(output_file.replace('GRCh37', 'GRCh38')))
     inferred_beta.to_csv(output_file.replace('GRCh37', 'GRCh38'), sep="\t", index=False)

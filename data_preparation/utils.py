@@ -1,4 +1,4 @@
-import numpy as np
+import pandas as pd
 
 
 def liftover_coordinates(dataframe,
@@ -30,8 +30,11 @@ def liftover_coordinates(dataframe,
 
     def convert_coords(x):
         try:
-            return converter[x[chr_col]][x[pos_col]][0][1]
+            res = converter[x[chr_col]][x[pos_col]][0]
+            chrom = int(res[0].replace('chr', ''))
+            pos = int(res[1])
+            return chrom, pos
         except Exception:
-            return -1
+            return -1, -1
 
-    return dataframe.apply(convert_coords, axis=1)
+    return zip(*dataframe.apply(convert_coords, axis=1))

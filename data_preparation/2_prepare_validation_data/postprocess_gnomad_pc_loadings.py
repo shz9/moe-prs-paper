@@ -62,9 +62,9 @@ if __name__ == '__main__':
                                                 sep="\t", index=False, header=False)
 
     # Liftover the coordinates from hg38 to hg19:
-    processed_pcl['POS'] = liftover_coordinates(processed_pcl,
-                                                source='hg38', target='hg19',
-                                                chain_file=args.liftover_chain)
+    processed_pcl['CHR'], processed_pcl['POS'] = liftover_coordinates(processed_pcl,
+                                                                      source='hg38', target='hg19',
+                                                                      chain_file=args.liftover_chain)
     # Discard SNPs with no matching positions in hg19
     processed_pcl = processed_pcl.loc[processed_pcl.POS > 0]
     print(f"> {len(processed_pcl)} variants remain after liftover to GRCh37...")
