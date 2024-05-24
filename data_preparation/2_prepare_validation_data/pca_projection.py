@@ -58,6 +58,14 @@ def project_samples_hail(bed_files,
         else:
             combined = combined.union_rows(mt)
 
+    print("Number of samples in the combined matrix table:", combined.count_cols())
+    print("Number of variants in the combined matrix table:", combined.count_rows())
+
+    # Filter the table to only include variants in the PC loadings table:
+    combined = combined.filter_rows(hl.is_defined(loadings_ht[combined.row_key]))
+
+    print("Number of variants after joining to the PC loadings table:", combined.count_rows())
+
     # Annotated the combined matrix table with the PC loadings and allele frequencies:
     mt = combined.annotate_rows(
         pca_loadings=loadings_ht[combined.row_key]['loadings'],
@@ -157,7 +165,6 @@ if __name__ == '__main__':
     if args.covar_file is not None:
         covar_df = pd.read_csv(args.covar_file, sep="\t",
                                names=['FID', 'IID', 'Sex'] + ['PC' + str(i + 1) for i in range(10)] + ['Age'])
-        sample_pcs['FID'] = 0
 
         covar_df['IID'] = covar_df['IID'].astype(sample_pcs['IID'].dtype)
         covar_df['FID'] = covar_df['FID'].astype(sample_pcs['FID'].dtype)

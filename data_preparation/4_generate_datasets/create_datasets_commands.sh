@@ -1,7 +1,7 @@
 #!/bin/bash
 
 biobanks=("ukbb" "cartagene")
-phenotypes=("EFO_0004713" "EFO_0004339" "EFO_0004340" "EFO_0004611" "EFO_0004612" "MONDO_0005148" "MONDO_0004979" "EFO_0004908" "EFO_0004518" "EFO_0004531")
+phenotypes=("ASTHMA" "CRTN" "HDL" "LDL" "T2D" "TST" "BMI" "FEV1_FVC" "HEIGHT" "LOG_TG" "TC" "URT")
 prop_test=0.3  # Proportion of samples to use for testing
 
 # Loop over phenotypes:

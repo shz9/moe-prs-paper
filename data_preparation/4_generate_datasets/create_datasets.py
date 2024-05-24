@@ -31,7 +31,7 @@ def create_prs_dataset(biobank, phenotype, pcs_source):
     cluster_assignment = pd.read_csv(f"data/covariates/{biobank}/cluster_assignment.txt",
                                      delim_whitespace=True)
     # Read the cluster interpretation file (i.e. map the cluster ID to names / descriptions):
-    cluster_interp = pd.read_csv(f"data/metadata/{biobank}/cluster_interpretation.csv",
+    cluster_interp = pd.read_csv(f"tables/metadata/{biobank}/cluster_interpretation.csv",
                                  index_col=0, header=0)
     # Read the ancestry assignments (from gnomAD random forest classifier) for individuals in this Biobank:
     gnomad_ancestry = pd.read_csv(f"data/covariates/{biobank}/ancestry_assignments.txt",
@@ -104,6 +104,10 @@ if __name__ == '__main__':
 
     prs_dataset = create_prs_dataset(args.biobank, args.phenotype, args.pcs_source)
 
+    # Save the entire dataset:
+    prs_dataset.save(f"data/harmonized_data/{args.phenotype}/{args.biobank}/full_data{args.data_suffix}.pkl")
+
+    # Split the dataset into training and testing sets:
     train_data, test_data = prs_dataset.train_test_split(test_size=args.prop_test)
 
     print(f"> Saving processed data to: data/harmonized_data/{args.phenotype}/{args.biobank}/")

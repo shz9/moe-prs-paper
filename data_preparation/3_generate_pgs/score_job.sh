@@ -21,7 +21,7 @@ python3 data_preparation/3_generate_pgs/score.py \
           --output-file "data/scores/$phenotype/ukbb.csv.gz"
 
 python3 data_preparation/3_generate_pgs/score.py \
-          --genotype_dir "data/ukbb_qc_cartagene/" \
+          --genotype_dir "data/cartagene_qc_genotypes/" \
           --pgs-dir "data/pgs_weights/$phenotype/GRCh38/" \
           --output-file "data/scores/$phenotype/cartagene.csv.gz"
 

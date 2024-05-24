@@ -1,0 +1,28 @@
+"","Cluster","Description","Details"
+"1",0,0 JPN,"Mostly born in Japan"
+"2",1,1 ITA,"Mostly born in Italy"
+"3",2,2 FIN,"Mostly born in Finland"
+"4",3,3 ENG-BRI,"Mostly born in England, (White British)"
+"5",4,"4 ENG-BRI-AOW","Mostly born in England (White British, Any other white)"
+"6",5,5 LEV,Mostly born in the Levant
+"7",6,6 NAF,"Mostly born in North Africa"
+"8",7,"7 SAS","Mostly born in South Asia"
+"9",8,"8 SAS-IND","Mostly born in South Asia (Indian)"
+"10",9,"9 SAS-MIX","Mostly born in South Asian (Mixed backgrounds)"
+"11",10,"10 SOM","Mostly born in Somalia"
+"12",11,"11 ENG-MIX",Mostly born in England (Mixed backgrounds)
+"13",12,"12 AMR",Mostly born in the Americas
+"14",13,13 SEA-CHN-OTH,"Mostly born in East/Southeast Asia (Chinese, Other backgrounds)"
+"15",14,14 ENG-EAS-MIX,Mostly born in England/East Asia (Mixed backgrounds)
+"16",15,15 NEP,"Mostly born in Nepal"
+"17",16,16 ESPPOR,"Mostly born in Iberia"
+"18",17,17 ENG-BRI,Mostly born in England (White British)
+"19",18,18 AFR,"Mostly born in sub-Saharan Africa"
+"20",19,19 WAFR-CAR,Mostly born in West Africa and Caribbean
+"21",20,20 ENG-BRI,"Mostly born in England (White British)"
+"22",21,21 ENG-BRI-OTH,"Mostly born in England (White British, Other backgrounds)"
+"23",22,22 ENG-CAR-WAB,"Mostly born in England (Caribbean, Mixed backgrounds)"
+"24",23,23 HAFR,"Mostly born in Greater Horn of Africa"
+"25",24,"24 ENG-BRI-OTH","Mostly born in England (White British, Other)"
+"26",25,25 ENG-AFR-CAR-MIX,"Mostly born in England, Africa, Caribbean (Mixed backgrounds)"
+
