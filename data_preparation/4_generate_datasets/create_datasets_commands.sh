@@ -10,6 +10,6 @@ do
   # Loop over biobanks:
   for biobank in "${biobanks[@]}"
   do
-    python3 data_preparation/create_datasets.py --biobank "$biobank" --phenotype "$phenotype" --pcs-source "gnomad" --prop-test "$prop_test"
+    python3 data_preparation/4_generate_datasets/create_datasets.py --biobank "$biobank" --phenotype "$phenotype" --pcs-source "gnomad" --prop-test "$prop_test"
   done
 done

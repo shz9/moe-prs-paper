@@ -14,6 +14,8 @@ def create_prs_dataset(biobank, phenotype, pcs_source):
     pheno_df = pd.read_csv(f"data/phenotypes/{biobank}/{phenotype}.txt",
                            delim_whitespace=True)
     pheno_df.rename(columns={'phenotype': phenotype}, inplace=True)
+    # Drop individuals with missing phenotype information:
+    pheno_df.dropna(subset=[phenotype], inplace=True)
 
     # Read the csv file containing the PRS scores for this phenotype and biobank:
     score_df = pd.read_csv(f"data/scores/{phenotype}/{biobank}.csv.gz",
@@ -39,7 +41,7 @@ def create_prs_dataset(biobank, phenotype, pcs_source):
 
     # Merge the cluster assignment with the cluster interpretation files:
     cluster_merged = cluster_assignment.merge(cluster_interp, on='Cluster')
-    cluster_merged = cluster_merged.merge(gnomad_ancestry, on=['FID', 'IID'])
+    cluster_merged = cluster_merged.merge(gnomad_ancestry, on=['FID', 'IID'], how='right')
 
     cluster_merged = cluster_merged[['FID', 'IID', 'Description',
                                      'afr', 'ami', 'amr', 'asj', 'eas', 'fin',
@@ -47,7 +49,11 @@ def create_prs_dataset(biobank, phenotype, pcs_source):
     cluster_merged.rename(columns={'Description': 'UMAP_Cluster', 'ancestry': 'Ancestry'}, inplace=True)
 
     # Merge the cluster information with the scores dataframe:
-    score_df = score_df.merge(cluster_merged, on=['FID', 'IID'])
+    score_df = score_df.merge(cluster_merged, on=['FID', 'IID'], how='left')
+
+    score_df['Ancestry'] = score_df['Ancestry'].fillna('oth')
+    score_df['UMAP_Cluster'] = score_df['UMAP_Cluster'].fillna('N/A')
+    score_df[['afr', 'ami', 'amr', 'asj', 'eas', 'fin', 'mid', 'nfe', 'oth', 'sas']].fillna(0., inplace=True)
 
     # ----------------------------------------------------------
     # Process covariates for individuals in this biobank:
@@ -59,10 +65,16 @@ def create_prs_dataset(biobank, phenotype, pcs_source):
 
     score_df = score_df.merge(covar_df, on=['FID', 'IID'])
 
+    # Drop samples with missing values:
+    n_samples_before = len(score_df)
+
     score_df = score_df.dropna().reset_index(drop=True)
 
+    if len(score_df) < n_samples_before:
+        print(f"Dropped {n_samples_before - len(score_df)} samples with missing values.")
+
     assert len(score_df) > 0, "No samples left after merging dataframes and purging missing values!"
-    print("Number of samples in the PRS dataset:", len(score_df))
+    print("Final number of samples in the PRS dataset:", len(score_df))
 
     return PRSDataset(
         score_df,
