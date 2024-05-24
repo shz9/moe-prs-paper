@@ -15,7 +15,7 @@ python3 data_preparation/2_prepare_validation_data/pca_projection.py \
         --genotype-ref-genome "GRCh38"
 
 python3 data_preparation/2_prepare_validation_data/pca_projection.py \
-        --bed-files "data/ukbb_qc_genotypes/*.bed" \
+        --bed-files "../gnomad_ukbb_genotypes/*.bed" \
         --pca-loadings "data/gnomad_data/gnomad.v3.1.pca_loadings.ht" \
         --covar-file "data/covariates/ukbb/covars_ukbb_pcs.txt" \
         --rf-model "data/gnomad_data/gnomad.v3.1.RF_fit.onnx" \

@@ -16,6 +16,8 @@ def create_prs_dataset(biobank, phenotype, pcs_source):
     # Drop individuals with missing phenotype information:
     pheno_df.dropna(subset=[phenotype], inplace=True)
 
+    print("> Number of samples with valid measurements:", len(pheno_df))
+
     # Read the csv file containing the PRS scores for this phenotype and biobank:
     score_df = pd.read_csv(f"data/scores/{phenotype}/{biobank}.csv.gz",
                            sep=r'\s+')

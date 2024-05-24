@@ -1,9 +1,9 @@
 #!/bin/bash
 
-# Loop over training datasets in "harmonized_data" directory
-# and invoke the training script for each one:
+mkdir -p ./log/model_fit/
+phenotypes=("ASTHMA" "CRTN" "HDL" "LDL" "T2D" "TST" "BMI" "FEV1_FVC" "HEIGHT" "LOG_TG" "TC" "URT")
 
-for dataset in data/harmonized_data/*/*/train_data.pkl
+for phenotype in "${phenotypes[@]}"
 do
-  python3 model/train_models.py --dataset-path "$dataset" --residualize-phenotype
+  sbatch -J "$phenotype" model/train_job.sh "$phenotype"
 done
