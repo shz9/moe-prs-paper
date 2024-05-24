@@ -36,71 +36,9 @@ MODEL_NAME_GNOMAD_ANCESTRY_MAP = {
     'PGS002358': 'eas',
 }
 
-MODEL_NAME_MAP = {
-    'PGS003843': 'EUR',
-    'PGS003845': 'AFR',
-    'PGS002313': 'EUR-BOLT',
-    'PGS002360': 'EAS',
+df = pd.read_csv("tables/phenotype_prs_table.csv")
+MODEL_NAME_MAP = dict(zip(df['PGSCatalog_ID'], df['Training_cohort']))
 
-    'PGS003864': 'AMR',
-    'PGS003862': 'EUR',
-    'PGS003863': 'AFR',
-    'PGS003865': 'EAS',
-
-    'PGS002800': 'SAS',
-    'PGS002801': 'AFR',
-    'PGS002802': 'ALL',
-    'PGS002803': 'EAS',
-    'PGS002804': 'EUR',
-    'PGS002805': 'AMR',
-
-    'PGS000894': 'AMR',
-    'PGS000896': 'SAS',
-    'PGS000890': 'EAS',
-    'PGS000886': 'AFR',
-    'PGS000892': 'EUR',
-
-    'PGS003770': 'AFR',
-    'PGS003775': 'EAS',
-    'PGS003780': 'SAS',
-    'PGS003768': 'EUR',
-
-    'PGS000806': 'AFR',
-    'PGS000804': 'ALL',
-    'PGS000807': 'ASN',
-    'PGS000805': 'EUR',
-    'PGS000808': 'AMR',
-
-    'PGS000321': 'COMB',
-    'PGS000322': 'F',
-    'PGS000323': 'M',
-    'PGS_TESTO_M': 'M_VIPRS',
-    'PGS_TESTO_F': 'F_VIPRS',
-
-    'PGS_CREAT_M': 'M',
-    'PGS_CREAT_F': 'F',
-
-    'PGS_URATE_M': 'M',
-    'PGS_URATE_F': 'F',
-
-    'PGS002311': 'EUR',
-    'PGS002358': 'EAS',
-
-    'Random': 'Random'
-}
-
-PHENOTYPE_MAP = {
-    'EFO_0004713': 'FEV1/FVC',
-    'EFO_0004339': 'Height',
-    'EFO_0004340': 'BMI',
-    'EFO_0004611': 'LDL',
-    'EFO_0004612': 'HDL',
-    'MONDO_0005148': 'T2D',
-    'MONDO_0004979': 'Asthma',
-    'EFO_0004908': 'Testosterone',
-    'EFO_0004518': 'Creatinine',
-    'EFO_0004531': 'Urate'
-}
 
 GROUP_MAP = {
     'afr': 'AFR',
@@ -211,11 +149,6 @@ def read_transform_eval_metrics(file_path):
 
     eval_df = pd.read_csv(file_path)
     phenotype_id = file_path.split('/')[-3]
-
-    try:
-        phenotype_id = PHENOTYPE_MAP[phenotype_id]
-    except KeyError:
-        pass
 
     eval_df['Phenotype'] = phenotype_id
     eval_df['Test biobank'] = file_path.split('/')[-2].upper()

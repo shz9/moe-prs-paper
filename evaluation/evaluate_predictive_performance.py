@@ -154,7 +154,7 @@ def evaluate_prs_models(prs_dataset,
                 pgs_metrics.append(mse(phenotype_values, pgs_values))
             elif metric == 'Incremental_R2':
                 pgs_metrics.append(incremental_r2(phenotype_values, pgs_values,
-                                                  covar.loc[keep, :])['Incremental_R2'])
+                                                  covar.loc[keep, :]))
             elif metric == 'Partial_CORR':
                 pgs_metrics.append(partial_correlation(phenotype_values, pgs_values,
                                                        covar.loc[keep, :]))
@@ -168,7 +168,7 @@ def evaluate_prs_models(prs_dataset,
                         pgs_metrics.append(pr_auc(phenotype_values, pgs_values))
             elif metric == 'Liability_R2':
                 pgs_metrics.append(liability_r2(phenotype_values, pgs_values,
-                                                covar.loc[keep, :])['Incremental_R2'])
+                                                covar.loc[keep, :]))
             elif metric == 'Nagelkerke_R2':
                 try:
                     pgs_metrics.append(nagelkerke_r2(phenotype_values, pgs_values,

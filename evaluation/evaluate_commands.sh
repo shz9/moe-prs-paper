@@ -1,14 +1,10 @@
 #!/bin/bash
 
-# Loop over test sets in "harmonized_data" directory
-# and invoke the evaluation script for each one:
+mkdir -p ./log/evaluation/
 
-for dataset in data/harmonized_data/*/*/test_data.pkl
+phenotypes=("ASTHMA" "CRTN" "HDL" "LDL" "T2D" "TST" "BMI" "FEV1_FVC" "HEIGHT" "LOG_TG" "TC" "URT")
+
+for phenotype in "${phenotypes[@]}"
 do
-  python3 evaluation/evaluate_predictive_performance.py --test-data "$dataset" \
-                                                        --cat-group-cols UMAP_Cluster Ancestry Sex \
-                                                        --cont-group-cols Age \
-                                                        --cont-group-bins 4 \
-                                                        --pc-clusters 5
+  sbatch -J "$phenotype" evaluation/evaluate_job.sh "$phenotype"
 done
-
