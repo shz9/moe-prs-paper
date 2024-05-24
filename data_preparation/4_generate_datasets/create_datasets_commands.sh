@@ -4,6 +4,8 @@ biobanks=("ukbb" "cartagene")
 phenotypes=("ASTHMA" "CRTN" "HDL" "LDL" "T2D" "TST" "BMI" "FEV1_FVC" "HEIGHT" "LOG_TG" "TC" "URT")
 prop_test=0.3  # Proportion of samples to use for testing
 
+source env/moe/bin/activate
+
 # Loop over phenotypes:
 for phenotype in "${phenotypes[@]}"
 do

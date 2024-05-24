@@ -39,7 +39,7 @@ makedir("data/phenotypes/cartagene/")
 sh = pheno_df[['FID', 'IID', 'HEIGHT']].copy()
 sh.columns = ['FID', 'IID', 'phenotype']
 sh['phenotype'] = np.where(detect_outliers(sh['phenotype'], stratify=pheno_df['Sex']), np.nan, sh['phenotype'])
-sh.to_csv("data/phenotypes/cartagene/HEIGHT.txt", sep="\t", index=False, na_rep='NA')
+sh.to_csv("data/phenotypes/cartagene/HEIGHT.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # Process data for BMI:
 
@@ -47,7 +47,7 @@ bmi = pheno_df[['FID', 'IID', 'BMI']].copy()
 bmi.columns = ['FID', 'IID', 'phenotype']
 bmi['phenotype'] = np.where(detect_outliers(np.log(bmi['phenotype']), stratify=pheno_df['Sex']),
                             np.nan, bmi['phenotype'])
-bmi.to_csv("data/phenotypes/cartagene/BMI.txt", sep="\t", index=False, na_rep='NA')
+bmi.to_csv("data/phenotypes/cartagene/BMI.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 
 # Process data for FEV1:
@@ -85,14 +85,14 @@ fev1_fvc.to_csv("data/phenotypes/cartagene/FEV1_FVC.txt", sep="\t", index=False,
 asthma = pheno_df[['FID', 'IID', 'ASTHMA']].copy()
 asthma['ASTHMA'] = asthma['ASTHMA'].replace({2.: 0., 9.: np.nan, 99.: np.nan})
 asthma.columns = ['FID', 'IID', 'phenotype']
-asthma.to_csv("data/phenotypes/cartagene/ASTHMA.txt", sep="\t", index=False,  na_rep='NA')
+asthma.to_csv("data/phenotypes/cartagene/ASTHMA.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # Process data for T2D:
 
 t2d = pheno_df[['FID', 'IID', 'T2D']].copy()
 t2d['T2D'] = t2d['T2D'].replace({2.: 0., 9.: np.nan, 99.: np.nan})
 t2d.columns = ['FID', 'IID', 'phenotype']
-t2d.to_csv("data/phenotypes/cartagene/T2D.txt", sep="\t", index=False,  na_rep='NA')
+t2d.to_csv("data/phenotypes/cartagene/T2D.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 
 # --------------------------------------------------------------------------------
@@ -116,7 +116,7 @@ ldl = blood_pheno_df[['FID', 'IID', 'LDL']].copy()
 ldl.columns = ['FID', 'IID', 'phenotype']
 ldl['phenotype'] = np.where(detect_outliers(ldl['phenotype'], stratify=blood_pheno_df['Sex']),
                             np.nan, ldl['phenotype'])
-ldl.to_csv("data/phenotypes/cartagene/LDL.txt", sep="\t", na_rep='NA')
+ldl.to_csv("data/phenotypes/cartagene/LDL.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # Process data for HDL:
 
@@ -124,7 +124,7 @@ hdl = blood_pheno_df[['FID', 'IID', 'HDL']].copy()
 hdl.columns = ['FID', 'IID', 'phenotype']
 hdl['phenotype'] = np.where(detect_outliers(np.log(hdl['phenotype']), stratify=blood_pheno_df['Sex']),
                             np.nan, hdl['phenotype'])
-hdl.to_csv("data/phenotypes/cartagene/HDL.txt", sep="\t", na_rep='NA')
+hdl.to_csv("data/phenotypes/cartagene/HDL.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # Process data for Total Cholesterol:
 
@@ -132,7 +132,7 @@ total_chol = blood_pheno_df[['FID', 'IID', 'TC']].copy()
 total_chol.columns = ['FID', 'IID', 'phenotype']
 total_chol['phenotype'] = np.where(detect_outliers(total_chol['phenotype'], stratify=blood_pheno_df['Sex']),
                                    np.nan, total_chol['phenotype'])
-total_chol.to_csv("data/phenotypes/cartagene/TC.txt", sep="\t", na_rep='NA')
+total_chol.to_csv("data/phenotypes/cartagene/TC.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # Process data for triglycerides:
 log_trig = blood_pheno_df[['FID', 'IID', 'TRIG']].copy()
@@ -140,7 +140,7 @@ log_trig.columns = ['FID', 'IID', 'phenotype']
 log_trig['phenotype'] = np.log(log_trig['phenotype'])
 log_trig['phenotype'] = np.where(detect_outliers(log_trig['phenotype'], stratify=blood_pheno_df['Sex']),
                                  np.nan, log_trig['phenotype'])
-log_trig.to_csv("data/phenotypes/cartagene/LOG_TG.txt", sep="\t", na_rep='NA')
+log_trig.to_csv("data/phenotypes/cartagene/LOG_TG.txt", sep="\t", index=False, header=False, na_rep='NA')
 
 # Process data for Creatinine:
 
@@ -148,5 +148,5 @@ creatinine = blood_pheno_df[['FID', 'IID', 'CREATININE']].copy()
 creatinine.columns = ['FID', 'IID', 'phenotype']
 creatinine['phenotype'] = np.where(detect_outliers(creatinine['phenotype'], stratify=blood_pheno_df['Sex']),
                                    np.nan, creatinine['phenotype'])
-creatinine.to_csv("data/phenotypes/cartagene/CRTN.txt", sep="\t", na_rep='NA')
+creatinine.to_csv("data/phenotypes/cartagene/CRTN.txt", sep="\t", index=False, header=False, na_rep='NA')
 
