@@ -1,7 +1,7 @@
 #!/bin/bash
 
 mkdir -p ./log/model_fit/
-phenotypes=("ASTHMA" "CRTN" "HDL" "LDL" "T2D" "TST" "BMI" "FEV1_FVC" "HEIGHT" "LOG_TG" "TC" "URT")
+phenotypes=("CRTN" "HDL" "LDL" "LDL_adj" "TST" "BMI" "FEV1_FVC" "HEIGHT" "LOG_TG" "TC" "URT" "T2D" "ASTHMA")
 
 for phenotype in "${phenotypes[@]}"
 do

@@ -2,6 +2,7 @@ import numpy as np
 from sklearn.linear_model import LinearRegression, Ridge, Lasso, ElasticNet, LogisticRegression
 from sklearn.utils.validation import check_is_fitted
 from sklearn.exceptions import NotFittedError
+import pandas as pd
 import copy
 import pickle
 
@@ -148,6 +149,23 @@ class MultiPRS(object):
         else:
             return self.reg_model.predict_proba(input_data)[:, 1]
 
+    def predict_prs(self, prs_dataset=None):
+
+        assert self.input_cols is not None
+
+        coefs = self.get_coefficients()
+
+        if prs_dataset is None:
+            input_data = self.input_data[:, [0, self.C]['Covariates' in coefs]:]
+        else:
+            input_data = prs_dataset.get_data_columns(self.expert_cols,
+                                                      scaler=self.data_scaler)
+
+        if self.family == "gaussian":
+            return input_data.dot(coefs['PRS']).flatten()
+        else:
+            return self.reg_model.predict_proba(input_data)[:, 1]
+
     def get_coefficients(self):
 
         assert self.reg_model is not None
@@ -156,12 +174,26 @@ class MultiPRS(object):
 
         if self.expert_cols is not None:
             if self.covariates_cols is not None:
-                coefs['Covariates'] = self.reg_model.coef_[:self.C]
-                coefs['PRS'] = self.reg_model.coef_[self.C:]
+
+                coefs['Covariates'] = pd.DataFrame(
+                    self.reg_model.coef_.flatten()[:self.C],
+                    index=self.covariates_cols,
+                    columns=['Coefficient'],)
+
+                coefs['PRS'] = pd.DataFrame(
+                    self.reg_model.coef_.flatten()[self.C:],
+                    index=self.expert_cols,
+                    columns=['Coefficient'],)
             else:
-                coefs['PRS'] = self.reg_model.coef_
+                coefs['PRS'] = pd.DataFrame(
+                    self.reg_model.coef_,
+                    index=self.expert_cols,
+                    columns=['Coefficient'],)
         else:
-            coefs['Covariates'] = self.reg_model.coef_
+            coefs['Covariates'] = pd.DataFrame(
+                self.reg_model.coef_,
+                index=self.covariates_cols,
+                columns=['Coefficient'],)
 
         return coefs
 

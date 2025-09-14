@@ -97,27 +97,9 @@ class PRSDataset(Dataset):
             self.phenotype_likelihood = phenotype_likelihood
 
         # Extract and keep the relevant data columns:
-        data_cols = []
-
-        if self.meta_cols is not None:
-            data_cols.extend(self.meta_cols)
-        if self.prs_cols is not None:
-            data_cols.extend(self.prs_cols)
-        if self.covariates_cols is not None:
-            data_cols.extend(self.covariates_cols)
-        data_cols += [self.phenotype_col]
 
         # Re-order the dataset columns so that the metadata columns come first:
-        self.data = self.data[data_cols]
-
-        # Keep only the data columns (i.e. remove the metadata columns):
-        if self.meta_cols is not None:
-            data_cols = data_cols[len(self.meta_cols):]
-
-        # Extract continuous and binary columns names from the remaining data columns:
-        self.continuous_cols = np.array([c for c in data_cols
-                                         if len(np.unique(self.data[c].values)) > 2])
-        self.binary_cols = np.array([c for c in data_cols if c not in self.continuous_cols])
+        self.data = self.data[self.get_data_cols(exclude_meta=False)]
 
         # Define the getitem columns:
         self.group_getitem_cols = None
@@ -178,6 +160,39 @@ class PRSDataset(Dataset):
         """
         return self.covariates_cols
 
+    def get_data_cols(self, exclude_meta=True):
+
+        # Extract and keep the relevant data columns:
+        data_cols = []
+
+        if self.meta_cols is not None and not exclude_meta:
+            data_cols.extend(self.meta_cols)
+        if self.prs_cols is not None:
+            data_cols.extend(self.prs_cols)
+        if self.covariates_cols is not None:
+            data_cols.extend(self.covariates_cols)
+
+        data_cols += [self.phenotype_col]
+
+        return data_cols
+
+    @property
+    def continuous_cols(self):
+        """
+        Get a list of columns in data that have continuous values
+        """
+
+        return np.array([c for c in self.get_data_cols(exclude_meta=True)
+                  if len(np.unique(self.data[c].values)) > 2])
+
+    @property
+    def binary_cols(self):
+        """
+        Get a list of columns in data that have binary values
+        """
+        np.array([c for c in self.get_data_cols(exclude_meta=True)
+                  if c not in self.continuous_cols])
+
     def set_backend(self, new_backend):
         """
         Set the backend for the data (i.e. Torch Tensor or numpy arrays).
@@ -197,19 +212,26 @@ class PRSDataset(Dataset):
         :param refit: If True, refit the scaler even if it has already been fit.
         """
 
+        # TESTING:
+        std_cols = list(self.covariates_cols) + [self.phenotype_col] + list(self.prs_cols)
+        std_cols = [c for c in std_cols if c in self.continuous_cols]
+
         if scaler is None:
+
+            assert self.scaler is not None
+
             if refit or not hasattr(self.scaler, "n_features_in_"):
-                self.scaler.fit(self.data[self.continuous_cols])
+                self.scaler.fit(self.data[std_cols])
             else:
                 return
         else:
 
             # Sanity checks:
             if hasattr(scaler, "feature_names_in_"):
-                assert np.array_equal(scaler.feature_names_in_, self.continuous_cols), \
-                    f"Feature names do not match! (1) {scaler.feature_names_in_} (2) {self.continuous_cols}"
+                assert np.array_equal(scaler.feature_names_in_, std_cols), \
+                    f"Feature names do not match! (1) {scaler.feature_names_in_} (2) {std_cols}"
             elif hasattr(scaler, "n_features_in_"):
-                assert scaler.n_features_in_ == len(self.continuous_cols)
+                assert scaler.n_features_in_ == len(std_cols)
 
             # Check if the data is already scaled (if it is, then we need to reverse-transform it first):
             if self.scaled_data:
@@ -217,7 +239,7 @@ class PRSDataset(Dataset):
 
             self.scaler = scaler
 
-        self.data[self.continuous_cols] = self.scaler.transform(self.data[self.continuous_cols])
+        self.data[std_cols] = self.scaler.transform(self.data[std_cols])
         self.scaled_data = True
 
     def inverse_standardize_data(self):
@@ -227,8 +249,12 @@ class PRSDataset(Dataset):
 
         assert self.scaler is not None
 
+        # TESTING:
+        std_cols = list(self.covariates_cols) + [self.phenotype_col] + list(self.prs_cols)
+        std_cols = [c for c in std_cols if c in self.continuous_cols]
+
         if self.scaled_data:
-            self.data[self.continuous_cols] = self.scaler.inverse_transform(self.data[self.continuous_cols])
+            self.data[std_cols] = self.scaler.inverse_transform(self.data[std_cols])
             self.scaled_data = False
 
     def adjust_phenotype_for_covariates(self):
@@ -256,6 +282,23 @@ class PRSDataset(Dataset):
         for prs_col in self.prs_cols:
             self.data[prs_col] = adjust_for_covariates(self.data[prs_col],
                                                        self.get_covariates())
+
+    def filter_outliers(self):
+        """
+        Filter outliers in both phenotype and PRS columns.
+        """
+
+        assert self.phenotype_col is not None
+        assert self.prs_cols is not None
+
+        from magenpy.stats.transforms.phenotype import detect_outliers
+
+        outliers = detect_outliers(self.data[self.phenotype_col])
+        for prs_col in self.prs_cols:
+            outliers |= detect_outliers(self.data[prs_col])
+
+        # Filter out the outliers:
+        self.filter_samples(np.where(~outliers)[0])
 
     def filter_samples(self, keep_idx):
 
@@ -401,13 +444,12 @@ class PRSDataset(Dataset):
 
     def __getitem__(self, idx):
 
+        assert self.group_getitem_col_idx is not None
+
         data_subset = self.data.iloc[idx, :].values
 
-        if self.group_getitem_col_idx is not None:
-            return {k: self.backend(data_subset[v].astype(np.float32))
-                    for k, v in self.group_getitem_col_idx.items()}
-        else:
-            return self.backend(data_subset)
+        return {k: self.backend(data_subset[v].astype(np.float32))
+                for k, v in self.group_getitem_col_idx.items()}
 
     def save(self, f):
 

@@ -1,5 +1,5 @@
 Phenotype,Phenotype_short,PhenotypeID,PGS,PGSCatalog_ID,Training_cohort,Notes
-Standing Height,HEIGHT,"EFO_0004339",PGS002800,PGS002800,SAS,
+Standing Height,HEIGHT,"EFO_0004339",PGS002800,PGS002800,CSA,
 Standing Height,HEIGHT,"EFO_0004339",PGS002801,PGS002801,AFR,
 Standing Height,HEIGHT,"EFO_0004339",PGS002803,PGS002803,EAS,
 Standing Height,HEIGHT,"EFO_0004339",PGS002804,PGS002804,EUR,
@@ -15,29 +15,29 @@ LDL Cholesterol,LDL,"EFO_0004611",PGS000886,PGS000886,AFR,
 LDL Cholesterol,LDL,"EFO_0004611",PGS000890,PGS000890,EAS,
 LDL Cholesterol,LDL,"EFO_0004611",PGS000892,PGS000892,EUR,
 LDL Cholesterol,LDL,"EFO_0004611",PGS000894,PGS000894,AMR,
-LDL Cholesterol,LDL,"EFO_0004611",PGS000896,PGS000896,SAS,
+LDL Cholesterol,LDL,"EFO_0004611",PGS000896,PGS000896,CSA,
 HDL Cholesterol,HDL,"EFO_0004612",PGS003768,PGS003768,EUR,
 HDL Cholesterol,HDL,"EFO_0004612",PGS003770,PGS003770,AFR,
 HDL Cholesterol,HDL,"EFO_0004612",PGS003775,PGS003775,EAS,
-HDL Cholesterol,HDL,"EFO_0004612",PGS003780,PGS003780,SAS,
+HDL Cholesterol,HDL,"EFO_0004612",PGS003780,PGS003780,CSA,
 Total Cholesterol,TC,"EFO_0004574",PGS003819,PGS003819,EUR,
 Total Cholesterol,TC,"EFO_0004574",PGS003821,PGS003821,AFR,
 Total Cholesterol,TC,"EFO_0004574",PGS003826,PGS003826,EAS,
-Total Cholesterol,TC,"EFO_0004574",PGS003831,PGS003831,SAS,
+Total Cholesterol,TC,"EFO_0004574",PGS003831,PGS003831,CSA,
 Log triglycerides,LOG_TG,"EFO_0004530",PGS003802,PGS003802,EUR,
 Log triglycerides,LOG_TG,"EFO_0004530",PGS003804,PGS003804,AFR,
 Log triglycerides,LOG_TG,"EFO_0004530",PGS003809,PGS003809,EAS,
-Log triglycerides,LOG_TG,"EFO_0004530",PGS003814,PGS003814,SAS,
+Log triglycerides,LOG_TG,"EFO_0004530",PGS003814,PGS003814,CSA,
 Type 2 Diabetes,T2D,"MONDO_0005148",PGS003735,PGS003735,AFR,
 Type 2 Diabetes,T2D,"MONDO_0005148",PGS003734,PGS003734,EAS,
 Type 2 Diabetes,T2D,"MONDO_0005148",PGS003733,PGS003733,EUR,
 Type 2 Diabetes,T2D,"MONDO_0005148",PGS003732,PGS003732,AMR,
-Type 2 Diabetes,T2D,"MONDO_0005148",PGS003731,PGS003731,SAS,
+Type 2 Diabetes,T2D,"MONDO_0005148",PGS003731,PGS003731,CSA,
 Asthma,ASTHMA,"MONDO_0004979",PGS002358,PGS002358,EAS,
 Asthma,ASTHMA,"MONDO_0004979",PGS002311,PGS002311,EUR,
-Testosterone,TST,"EFO_0004908",TST_M,,M,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-Testosterone,TST,"EFO_0004908",TST_F,,F,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-Urate,URT,"EFO_0004531",URT_M,,M,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-Urate,URT,"EFO_0004531",URT_F,,F,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-Creatinine,CRTN,"EFO_0004518",CRTN_M,,M,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-Creatinine,CRTN,"EFO_0004518",CRTN_F,,F,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+Testosterone,TST,"EFO_0004908",PGS_TST_M,,Male,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+Testosterone,TST,"EFO_0004908",PGS_TST_F,,Female,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+Urate,URT,"EFO_0004531",PGS_URT_M,,Male,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+Urate,URT,"EFO_0004531",PGS_URT_F,,Female,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+Creatinine,CRTN,"EFO_0004518",PGS_CRTN_M,,Male,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+Creatinine,CRTN,"EFO_0004518",PGS_CRTN_F,,Female,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"

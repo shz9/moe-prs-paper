@@ -95,15 +95,24 @@ def ensemble_mixture_loss(expert_weights, expert_predictions, phenotype, family=
 
     assert family in ("gaussian", "binomial")
 
-    N = expert_weights.shape[0]
     pred = (expert_weights*expert_predictions).sum(axis=1)
 
     if family == "gaussian":
-        return (1./N)*((pred - phenotype)**2).sum()
+        return ((pred - phenotype)**2).mean()
     else:
         pred = torch.clamp(pred, 1e-6, 1.-1e-6)
-        return (-1./N)*(phenotype*torch.log(pred) + (1.-phenotype)*torch.log(1.-pred)).sum()
+        return -(phenotype*torch.log(pred) + (1.-phenotype)*torch.log(1.-pred)).mean()
 
+
+def ensemble_mixture_loss_simple(phenotype, pred, family="gaussian"):
+
+    assert family in ("gaussian", "binomial")
+
+    if family == "gaussian":
+        return ((pred - phenotype)**2).mean()
+    else:
+        pred = torch.clamp(pred, 1e-6, 1.-1e-6)
+        return -(phenotype*torch.log(pred) + (1.-phenotype)*torch.log(1.-pred)).mean()
 
 #########################################################
 # Define a PyTorch Lightning module to streamline training
@@ -249,6 +258,154 @@ class Lit_MoEPRS(pl.LightningModule):
         return (self.gate_forward(batch)*self.scale_expert_predictions(batch)).sum(axis=1)
 
     def predict(self, batch):
+
+        if isinstance(batch, dict):
+            return self.forward(batch)
+        else:
+            return self.predict_from_dataset(batch)
+
+    def predict_from_dataset(self, prs_dataset):
+
+        # Sanity checks:
+        assert 'experts' in prs_dataset.group_getitem_cols
+        assert 'gate_input' in prs_dataset.group_getitem_cols
+        assert self.group_getitem_cols['experts'] == prs_dataset.group_getitem_cols['experts']
+        assert self.group_getitem_cols['gate_input'] == prs_dataset.group_getitem_cols['gate_input']
+
+        prs_dataset.set_backend("torch")
+
+        dat = DataLoader(prs_dataset, batch_size=prs_dataset.N, shuffle=False)
+
+        return self.forward(next(iter(dat))).detach().numpy()
+
+    def predict_proba(self, batch):
+
+        if isinstance(batch, dict):
+            return self.gate_model(batch)
+        else:
+            return self.predict_proba_from_dataset(batch)
+
+    def predict_proba_from_dataset(self, prs_dataset):
+
+        assert 'gate_input' in prs_dataset.group_getitem_cols
+        assert self.group_getitem_cols['gate_input'] == prs_dataset.group_getitem_cols['gate_input']
+
+        prs_dataset.set_backend("torch")
+
+        dat = DataLoader(prs_dataset, batch_size=prs_dataset.N, shuffle=False)
+
+        return self.gate_forward(next(iter(dat))).detach().numpy()
+
+    def configure_optimizers(self):
+
+        if self.optimizer == "Adam":
+            optimizer = torch.optim.Adam(self.parameters(),
+                                         lr=self.lr,
+                                         weight_decay=self.weight_decay)
+        elif self.optimizer == "SGD":
+            optimizer = torch.optim.SGD(self.parameters(),
+                                        lr=self.lr,
+                                        weight_decay=self.weight_decay)
+        else:
+            optimizer = torch.optim.LBFGS(self.parameters())
+
+        return optimizer
+
+
+class Lit_MoEPRS2(pl.LightningModule):
+
+    def __init__(self,
+                 group_getitem_cols,
+                 optimizer="Adam",
+                 family="gaussian",
+                 learning_rate=1e-3,
+                 weight_decay=0.):
+        """
+        A PyTorch Lightning module for training a mixture of experts model.
+
+        :param group_getitem_cols: A dictionary mapping categories of data to the relevant keys from the
+         pandas dataframe. This is useful for iterative data fetching (e.g. data loaders).
+            These are used to define what columns/groups of columns are fetched in the __getitem__ method.
+        :param gate_model_layers: A list of integers specifying the number of hidden units
+        in the gating model.
+        :param gate_add_batch_norm: If True, add batch normalization to the gating model.
+        :param loss: The loss function to use. Options are: ('likelihood_mixture', 'ensemble_mixture')
+        :param optimizer: The optimizer to use. Options are: ('Adam', 'LBFGS', 'SGD')
+        :param family: The family of the likelihood. Options are: ('gaussian', 'binomial')
+        :param learning_rate: The learning rate for the optimizer.
+        :param weight_decay: The weight decay for the optimizer.
+        """
+
+        super().__init__()
+
+        # -------------------------------------------------------
+        # Sanity checks for the inputs:
+        assert optimizer in ("Adam", "LBFGS", "SGD")
+        assert family in ("gaussian", "binomial")
+
+        assert 'phenotype' in group_getitem_cols
+        assert 'gate_input' in group_getitem_cols
+        assert 'experts' in group_getitem_cols
+
+        # -------------------------------------------------------
+        # Define / initialize the model components:
+
+        self.group_getitem_cols = group_getitem_cols
+
+        self.model = MoEWithLinear(self.gate_input_dim,
+                                   self.n_experts,
+                                   family=family)
+
+        self.loss = partial(ensemble_mixture_loss_simple, family=family)
+
+        # Optimizer options:
+        self.family = family
+        self.optimizer = optimizer
+        self.lr = learning_rate
+        self.weight_decay = weight_decay
+
+    @property
+    def n_experts(self):
+        return len(self.group_getitem_cols['experts'])
+
+    @property
+    def gate_input_dim(self):
+        return len(self.group_getitem_cols['gate_input'])
+
+    def batch_step(self, batch, batch_idx):
+
+        loss = self.loss(batch['phenotype'], self.forward(batch), batch['phenotype'])
+
+        # If we're using L-BFGS for optimization, add weight decay manually:
+        if self.weight_decay > 0. and self.optimizer == "LBFGS":
+            loss += self.weight_decay * torch.norm(self.gate_model.gate[0].weight, p=2)
+            if self.n_expert_covariates > 0:
+                for expert in self.expert_scaler:
+                    loss += self.weight_decay * torch.norm(expert.linear_model.weight, p=2)
+
+        return loss
+
+    def training_step(self, batch, batch_idx):
+
+        loss = self.batch_step(batch, batch_idx)
+
+        self.log("train_loss", loss, prog_bar=True)
+
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        loss = self.batch_step(batch, batch_idx)
+        self.log("val_loss", loss, prog_bar=True)
+
+        return loss
+
+    def gate_forward(self, batch):
+        return self.model.gating.forward(batch['gate_input'])
+
+    def forward(self, batch):
+        return self.model.forward(batch['gate_input'], batch['experts'])
+
+    def predict(self, batch):
         return self.forward(batch)
 
     def predict_from_dataset(self, prs_dataset):
@@ -294,8 +451,60 @@ class Lit_MoEPRS(pl.LightningModule):
 
         return optimizer
 
-
 #########################################################
+
+class MoEWithLinear(nn.Module):
+    def __init__(self, num_covariates, num_experts, family='gaussian'):
+
+        super().__init__()
+
+        assert family in ('gaussian', 'binomial')
+
+        self.num_experts = num_experts
+        self.family = family
+
+        # Linear model over covariates (includes bias)
+        self.linear = nn.Linear(num_covariates, 1)
+
+        # One linear expert per x dimension (just weight + bias)
+        self.expert_weights = nn.Parameter(torch.randn(num_experts))  # shape (m,)
+        self.expert_biases = nn.Parameter(torch.randn(num_experts))   # shape (m,)
+
+        # Gating model that uses C to produce weights over experts
+        self.gating = GateModel(num_covariates, num_experts)
+
+        if family == 'gaussian':
+            self.final_activation = nn.Identity()
+        else:
+            self.final_activation = nn.Sigmoid()
+
+    def forward(self, C, x):
+        """
+        Inputs:
+        - C: (N, k) covariates
+        - x: (N, m) input to experts
+        Output:
+        - y_pred: (N,) predicted response
+        """
+        N, m = x.shape
+        assert m == self.num_experts, "Each expert should correspond to one x dimension"
+
+        # Linear part from covariates
+        linear_out = self.linear(C).squeeze(-1)  # shape (N,)
+
+        # Expert outputs: apply weight and bias to each x[:, i]
+        expert_outputs = x * self.expert_weights + self.expert_biases  # shape (N, m)
+
+        # Gating weights from C
+        gate_weights = self.gating(C)  # shape (N, m), softmax over experts
+
+        # Weighted sum of expert outputs
+        moe_out = torch.sum(gate_weights * expert_outputs, dim=1)  # shape (N,)
+
+        # Final output
+        return self.final_activation(linear_out + moe_out)
+
+
 # Define the gating model:
 
 class GateModel(nn.Module):

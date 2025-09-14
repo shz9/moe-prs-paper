@@ -22,7 +22,11 @@ def plot_admixture_graphs(prs_dataset,
                           min_group_size=50,
                           subsample_within_groups=False,
                           agg_mechanism='mean',
-                          palette='gist_ncar'):
+                          figsize='auto',
+                          palette='Set3',
+                          sorted_groups=None,
+                          drop_legend=False,
+                          tick_rotation=90):
     """
     Plot the admixture graph for a given model and dataset.
     This function takes a PRSDataset object and a trained MoE model and figures the admixture graph
@@ -38,6 +42,8 @@ def plot_admixture_graphs(prs_dataset,
     :param agg_mechanism: The mechanism to use for aggregation. Can be 'mean' or 'sort'.
     If 'mean', the mean gating weights for each group will be plotted. If 'sort', the gating weights
     for each individual will be shown within their respective groups, sorted by the mean gating weight.
+    :param figsize: The size of the figure to plot. If 'auto', the size will be determined based on the number of groups.
+    :param palette: The color palette to use for the plot.
     """
 
     assert agg_mechanism in ['mean', 'sort'], "Aggregation mechanism must be either 'mean' or 'sort'."
@@ -77,19 +83,18 @@ def plot_admixture_graphs(prs_dataset,
             proba = proba[proba[group_col].isin(group_counts.index)]
 
         # Map the group names:
-        if group_col in ('Ancestry', 'Sex'):
-            proba[group_col] = proba[group_col].astype(str).map(GROUP_MAP)
+        if group_col == 'Sex':
+            proba[group_col] = proba[group_col].astype(int).astype(str).map(GROUP_MAP).fillna(proba[group_col])
 
-        if group_col in ('Ancestry', 'UMAP_Cluster'):
+        if sorted_groups is None and group_col in ('Ancestry', 'UMAP_Cluster'):
             sorted_groups = sort_groups(proba[group_col].unique())
-        else:
-            sorted_groups = None
 
         if subsample_within_groups:
-            # Determine the median size of the groups:
-            median_group_size = int(np.median(proba.groupby(group_col).size()))
 
-            # Define a function to sub-sample only if the group size is
+            # Determine the median size of the groups (cap it at 1k):
+            median_group_size = min(int(np.median(proba.groupby(group_col).size())), 1000)
+
+            # Define a function to subsample only if the group size is
             # more than twice larger than the median:
 
             def cond_subsample_func(x):
@@ -102,24 +107,30 @@ def plot_admixture_graphs(prs_dataset,
             proba = proba.groupby(group_col).apply(cond_subsample_func).reset_index(drop=True)
 
         # Adjust the figure size:
-        if agg_mechanism == 'sort':
-            figsize = (25, 5)
-        else:
-            figsize = (12, 6)
+        if figsize == 'auto':
+            if agg_mechanism == 'sort' and sorted_groups is not None:
+                figsize = (25, 5)
+            else:
+                figsize = (12, 6)
 
-        plot_expert_weights(proba,
-                            agg_col=group_col,
-                            agg_mechanism=agg_mechanism,
-                            agg_order=sorted_groups,
-                            figsize=figsize,
-                            title=title,
-                            palette=palette,
-                            output_file=output_file)
+        return plot_expert_weights(proba,
+                                   agg_col=group_col,
+                                   agg_mechanism=agg_mechanism,
+                                   agg_order=sorted_groups,
+                                   figsize=figsize,
+                                   title=title,
+                                   palette=palette,
+                                   output_file=output_file,
+                                   drop_legend=drop_legend,
+                                   tick_rotation=tick_rotation)
     else:
-        plot_expert_weights(proba,
-                            title=title,
-                            palette=palette,
-                            output_file=output_file)
+        return plot_expert_weights(proba,
+                                   title=title,
+                                   palette=palette,
+                                   agg_order=sorted_groups,
+                                   output_file=output_file,
+                                   drop_legend=drop_legend,
+                                   tick_rotation=tick_rotation)
 
 
 if __name__ == '__main__':

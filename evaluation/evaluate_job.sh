@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --account=def-sgravel
+#SBATCH --account=ctb-sgravel
 #SBATCH --cpus-per-task=8
-#SBATCH --mem-per-cpu=2GB
+#SBATCH --mem-per-cpu=1GB
 #SBATCH --time=02:00:00
 #SBATCH --output=./log/evaluation/%x.out
 #SBATCH --mail-user=shadi.zabad@mail.mcgill.ca
@@ -11,13 +11,12 @@ phenotype=${1:-"HEIGHT"}
 
 echo "Job started at: `date`"
 
-for dataset in data/harmonized_data/"$phenotype"/*/test_data.pkl
+source "env/moe/bin/activate"
+
+for dataset in data/harmonized_data/"$phenotype"/*/*_data.pkl
 do
   python3 evaluation/evaluate_predictive_performance.py --test-data "$dataset" \
-                                                        --cat-group-cols UMAP_Cluster Ancestry Sex \
-                                                        --cont-group-cols Age \
-                                                        --cont-group-bins 4 \
-                                                        --pc-clusters 5
+                                                        --cat-group-cols Ancestry Sex
 done
 
 echo "Job finished with exit code $? at: `date`"

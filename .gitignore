@@ -2,6 +2,7 @@
 *.py[cod]
 **/.ipynb_checkpoints
 .DS_Store
+**/.ropeproject
 
 # C extensions
 *.c

@@ -1,12 +1,13 @@
 import sys
 import os.path as osp
+import copy
 sys.path.append(osp.dirname(osp.dirname(__file__)))
 sys.path.append(osp.dirname(osp.dirname(osp.dirname(__file__))))
 from baseline_models import MultiPRS, AncestryWeightedPRS
 from moe import MoEPRS
 from moe_pytorch import Lit_MoEPRS, train_model
 from PRSDataset import PRSDataset
-from plotting.plot_utils import MODEL_NAME_GNOMAD_ANCESTRY_MAP
+#from plotting.plot_utils import MODEL_NAME_GNOMAD_ANCESTRY_MAP
 from magenpy.utils.system_utils import makedir
 import argparse
 
@@ -33,38 +34,6 @@ def train_baseline_linear_models(dataset,
 
     base_models['MultiPRS'].fit()
 
-    try:
-        amw_b = AncestryWeightedPRS(prs_dataset=dataset,
-                                    expert_cols=dataset.prs_cols,
-                                    covariates_cols=dataset.covariates_cols,
-                                    weighing_scheme='before',
-                                    expert_ancestry_map=MODEL_NAME_GNOMAD_ANCESTRY_MAP,
-                                    add_intercept=add_intercept,
-                                    class_weights=class_weights,
-                                    penalty_type=penalty_type,
-                                    penalty=penalty)
-        amw_b.fit()
-
-        base_models['AncestryWeightedPRS_B'] = amw_b
-    except Exception as e:
-        pass
-
-    try:
-        amw_a = AncestryWeightedPRS(prs_dataset=dataset,
-                                    expert_cols=dataset.prs_cols,
-                                    covariates_cols=dataset.covariates_cols,
-                                    weighing_scheme='after',
-                                    expert_ancestry_map=MODEL_NAME_GNOMAD_ANCESTRY_MAP,
-                                    add_intercept=add_intercept,
-                                    class_weights=class_weights,
-                                    penalty_type=penalty_type,
-                                    penalty=penalty)
-        amw_a.fit()
-
-        base_models['AncestryWeightedPRS_A'] = amw_a
-    except Exception as e:
-        pass
-
     base_models['Covariates'] = MultiPRS(prs_dataset=dataset,
                                          covariates_cols=dataset.covariates_cols,
                                          add_intercept=add_intercept,
@@ -90,8 +59,6 @@ def train_baseline_linear_models(dataset,
 
 
 def train_moe_model_numpy(dataset,
-                          fix_residuals=False,
-                          class_weights=None,
                           gate_penalty=0.,
                           expert_penalty=0.,
                           gate_add_intercept=True,
@@ -102,83 +69,113 @@ def train_moe_model_numpy(dataset,
 
     dataset.set_backend("numpy")
 
-    """
-    m1 = MoEPRS(prs_dataset=dataset,
-                expert_cols=dataset.prs_cols,
-                gate_input_cols=dataset.covariates_cols,
-                expert_covariates_cols=dataset.covariates_cols,
-                optimizer=optimizer,
-                fix_residuals=fix_residuals,
-                class_weights=class_weights,
-                gate_add_intercept=gate_add_intercept,
-                expert_add_intercept=expert_add_intercept,
-                gate_penalty=gate_penalty,
-                expert_penalty=expert_penalty,
-                n_jobs=min(4, dataset.n_prs_models))
-    m1.fit()
+    moe = MoEPRS(prs_dataset=dataset,
+                 expert_cols=dataset.prs_cols,
+                 gate_input_cols=dataset.covariates_cols,
+                 global_covariates_cols=dataset.covariates_cols,
+                 optimizer=optimizer,
+                 fix_residuals=False,
+                 gate_add_intercept=gate_add_intercept,
+                 expert_add_intercept=expert_add_intercept,
+                 gate_penalty=gate_penalty,
+                 expert_penalty=expert_penalty,
+                 n_jobs=min(4, dataset.n_prs_models))
 
-    # Model without covariates in experts:
-    m2 = MoEPRS(prs_dataset=dataset,
-                expert_cols=dataset.prs_cols,
-                gate_input_cols=dataset.covariates_cols,
-                optimizer=optimizer,
-                fix_residuals=fix_residuals,
-                class_weights=class_weights,
-                gate_add_intercept=gate_add_intercept,
-                expert_add_intercept=expert_add_intercept,
-                gate_penalty=gate_penalty,
-                expert_penalty=expert_penalty,
-                n_jobs=min(4, dataset.n_prs_models))
-    m2.fit()
-    """
+    moe.fit()
 
-    m3 = MoEPRS(prs_dataset=dataset,
-                expert_cols=[c for c in dataset.prs_cols if c != 'Random'],
-                gate_input_cols=dataset.covariates_cols,
-                expert_covariates_cols=dataset.covariates_cols,
-                optimizer=optimizer,
-                fix_residuals=fix_residuals,
-                class_weights=class_weights,
-                gate_add_intercept=gate_add_intercept,
-                expert_add_intercept=expert_add_intercept,
-                gate_penalty=gate_penalty,
-                expert_penalty=expert_penalty,
-                n_jobs=min(4, dataset.n_prs_models))
-    m3.fit()
+    moe_global_int = MoEPRS(prs_dataset=dataset,
+                 expert_cols=dataset.prs_cols,
+                 gate_input_cols=dataset.covariates_cols,
+                 global_covariates_cols=dataset.covariates_cols,
+                 optimizer=optimizer,
+                 fix_residuals=False,
+                 gate_add_intercept=gate_add_intercept,
+                 expert_add_intercept=False,
+                 gate_penalty=gate_penalty,
+                 expert_penalty=expert_penalty,
+                 n_jobs=min(4, dataset.n_prs_models))
 
-    m4 = MoEPRS(prs_dataset=dataset,
-                expert_cols=[c for c in dataset.prs_cols if c != 'Random'],
-                gate_input_cols=dataset.covariates_cols,
-                optimizer=optimizer,
-                fix_residuals=fix_residuals,
-                class_weights=class_weights,
-                gate_add_intercept=gate_add_intercept,
-                expert_add_intercept=expert_add_intercept,
-                gate_penalty=gate_penalty,
-                expert_penalty=expert_penalty,
-                n_jobs=min(4, dataset.n_prs_models))
-    m4.fit()
+    moe_global_int.fit()
 
-    m5 = MoEPRS(prs_dataset=dataset,
-                expert_cols=[c for c in dataset.prs_cols if c != 'Random'],
-                gate_input_cols=dataset.covariates_cols,
-                optimizer=optimizer,
-                fix_residuals=fix_residuals,
-                class_weights=class_weights,
-                gate_add_intercept=gate_add_intercept,
-                expert_add_intercept=False,
-                gate_penalty=gate_penalty,
-                expert_penalty=expert_penalty,
-                n_jobs=min(4, dataset.n_prs_models))
-    m5.fit()
+    # Try the same but with two-step fitting:
+    moe_global_int_two_step = copy.deepcopy(moe_global_int)
+    moe_global_int_two_step.two_step_fit()
 
-    return {
-        #'MoE': m1,
-        #'MoE-no-cov': m2,
-        'MoE-no-rand': m3,
-        'MoE-no-cov-rand': m4,
-        'MoE-no-cov-rand-int': m5
+    moe_cfg = MoEPRS(prs_dataset=dataset,
+                       expert_cols=dataset.prs_cols,
+                       gate_input_cols=None,
+                       global_covariates_cols=dataset.covariates_cols,
+                       optimizer=optimizer,
+                       fix_residuals=False,
+                       gate_add_intercept=gate_add_intercept,
+                       expert_add_intercept=False,  ## Check this?
+                       gate_penalty=gate_penalty,
+                       expert_penalty=expert_penalty,
+                       n_jobs=min(4, dataset.n_prs_models))
+    moe_cfg.fit()
+
+    res = {
+        'MoE-CFG': moe_cfg,
+        'MoE': moe,
+        'MoE-global-int': moe_global_int,
+        'MoE-global-int-two-step': moe_global_int_two_step
     }
+
+    if dataset.phenotype_likelihood != 'binomial':
+
+        moe_fix_resid = MoEPRS(prs_dataset=dataset,
+                               expert_cols=dataset.prs_cols,
+                               gate_input_cols=dataset.covariates_cols,
+                               global_covariates_cols=dataset.covariates_cols,
+                               optimizer=optimizer,
+                               fix_residuals=True,
+                               gate_add_intercept=gate_add_intercept,
+                               expert_add_intercept=expert_add_intercept,
+                               gate_penalty=gate_penalty,
+                               expert_penalty=expert_penalty,
+                               n_jobs=min(4, dataset.n_prs_models))
+        moe_fix_resid.fit()
+
+        moe_fix_resid_global_int = MoEPRS(prs_dataset=dataset,
+                               expert_cols=dataset.prs_cols,
+                               gate_input_cols=dataset.covariates_cols,
+                               global_covariates_cols=dataset.covariates_cols,
+                               optimizer=optimizer,
+                               fix_residuals=True,
+                               gate_add_intercept=gate_add_intercept,
+                               expert_add_intercept=False,
+                               gate_penalty=gate_penalty,
+                               expert_penalty=expert_penalty,
+                               n_jobs=min(4, dataset.n_prs_models))
+        moe_fix_resid_global_int.fit()
+
+        res['MoE-fixed-resid'] = moe_fix_resid
+        res['MoE-fixed-resid-global-int'] = moe_fix_resid_global_int
+
+        # Try two-step fitting for the fixed residuals + global intercept model:
+        moe_fix_resid_global_int_two_step = copy.deepcopy(moe_fix_resid_global_int)
+        moe_fix_resid_global_int_two_step.two_step_fit()
+
+        res['MoE-fixed-resid-global-int-two-step'] = moe_fix_resid_global_int_two_step
+
+        """
+        moe_huber = MoEPRS(prs_dataset=dataset,
+                           expert_cols=dataset.prs_cols,
+                           gate_input_cols=dataset.covariates_cols,
+                           global_covariates_cols=dataset.covariates_cols,
+                           optimizer=optimizer,
+                           loss='huber',
+                           gate_add_intercept=gate_add_intercept,
+                           expert_add_intercept=expert_add_intercept,
+                           gate_penalty=gate_penalty,
+                           expert_penalty=expert_penalty,
+                           n_jobs=min(4, dataset.n_prs_models))
+        moe_huber.fit()
+
+        res['MoE-huber'] = moe_huber
+        """
+
+    return res
 
 
 def train_moe_models_torch(dataset,
@@ -194,14 +191,16 @@ def train_moe_models_torch(dataset,
 
     dataset.set_backend("torch")
 
-    dataset.group_getitem_cols = {
+    group_getitem_cols = {
         'phenotype': [dataset.phenotype_col],
         'gate_input': dataset.covariates_cols,
         'experts': dataset.prs_cols
     }
 
     if add_covariates_to_experts:
-        dataset.group_getitem_cols['expert_covariates'] = dataset.covariates_cols
+        group_getitem_cols['expert_covariates'] = dataset.covariates_cols
+
+    dataset.set_group_getitem_cols(group_getitem_cols)
 
     # Initialize the torch MoE model:
     m = Lit_MoEPRS(dataset.group_getitem_cols,

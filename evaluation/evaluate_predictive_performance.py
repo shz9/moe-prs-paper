@@ -7,7 +7,8 @@ import os.path as osp
 import sys
 from magenpy.utils.system_utils import makedir
 from viprs.eval.binary_metrics import roc_auc, pr_auc, liability_r2, nagelkerke_r2
-from viprs.eval.continuous_metrics import mse, r2, incremental_r2, partial_correlation, pearson_r, r2_stats
+from viprs.eval.continuous_metrics import mse, r2, incremental_r2, partial_correlation, pearson_r
+from viprs.eval.eval_utils import r2_stats
 
 parent_dir = osp.dirname(osp.dirname(osp.abspath(__file__)))
 sys.path.append(parent_dir)
@@ -25,9 +26,39 @@ from eval_utils import (
     generate_pc_cluster_masks
 )
 
+import numpy as np
+from sklearn.metrics import average_precision_score
+
+def average_precision_at_top_percentile(y_true, y_pred, percentile=0.05):
+    """
+    Computes average precision for identifying the top percentile of y_true using y_pred.
+
+    Parameters:
+    - y_true: array-like, true continuous target values
+    - y_pred: array-like, predicted scores
+    - percentile: float, e.g., 0.05 for top 5%
+
+    Returns:
+    - average_precision: float, average precision score
+    """
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+
+    # Determine the threshold to consider top percentile
+    threshold = np.percentile(y_true, 100 * (1 - percentile))  # top X%
+
+    # Binary labels: 1 if in top X%, else 0
+    y_top = (y_true >= threshold).astype(int)
+
+    # Average precision score
+    ap = average_precision_score(y_top, y_pred)
+
+    return ap
+
+
 
 def stratified_evaluation(prs_dataset,
-                          trained_models,
+                          trained_models=None,
                           cat_group_cols=None,
                           cont_group_cols=None,
                           cont_group_bins=None,
@@ -39,7 +70,10 @@ def stratified_evaluation(prs_dataset,
 
     prs_dataset.set_backend("numpy")
 
-    preds = generate_predictions(prs_dataset, trained_models)
+    if trained_models is None or len(trained_models) == 0:
+        preds = None
+    else:
+        preds = generate_predictions(prs_dataset, trained_models)
 
     # Generate sample masks to stratify the dataset:
     msks = {}
@@ -54,7 +88,7 @@ def stratified_evaluation(prs_dataset,
 
     # Evaluate the models across everyone:
 
-    edf = evaluate_prs_models(prs_dataset, preds)
+    edf = evaluate_prs_models(prs_dataset, other_models=preds)
     edf['EvalCategory'] = 'All'
     edf['EvalGroup'] = 'All'
     edf['N'] = prs_dataset.N
@@ -65,7 +99,7 @@ def stratified_evaluation(prs_dataset,
         print("> Evaluation group:", mg)
         for m, msk in msk_group.items():
             print("\t> Subgroup:", m)
-            edf = evaluate_prs_models(prs_dataset, preds, mask=msk, min_group_size=min_group_size)
+            edf = evaluate_prs_models(prs_dataset, other_models=preds, mask=msk, min_group_size=min_group_size)
 
             if edf is None:
                 continue
@@ -98,7 +132,7 @@ def evaluate_prs_models(prs_dataset,
         return None
 
     if prs_dataset.phenotype_likelihood == 'gaussian':
-        metrics = ('CORR', 'MSE', 'Incremental_R2', 'Partial_CORR')
+        metrics = ('CORR', 'MSE', 'Incremental_R2', 'Partial_CORR', 'AVG_PREC_TOP5')
     else:
         metrics = ('ROC_AUC', 'PR_AUC', 'Liability_R2', 'Nagelkerke_R2')
 
@@ -152,6 +186,8 @@ def evaluate_prs_models(prs_dataset,
                 pgs_metrics.append(pearson_r(phenotype_values, pgs_values))
             elif metric == 'MSE':
                 pgs_metrics.append(mse(phenotype_values, pgs_values))
+            elif metric == 'AVG_PREC_TOP5':
+                pgs_metrics.append(average_precision_at_top_percentile(phenotype_values, pgs_values, percentile=0.05))
             elif metric == 'Incremental_R2':
                 pgs_metrics.append(incremental_r2(phenotype_values, pgs_values,
                                                   covar.loc[keep, :]))

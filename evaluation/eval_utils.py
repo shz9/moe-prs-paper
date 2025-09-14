@@ -72,6 +72,9 @@ def generate_continuous_masks(prs_dataset, cont_group_cols, n_bins=4):
     if isinstance(n_bins, int):
         n_bins = [n_bins]*len(cont_group_cols)
 
+    if isinstance(cont_group_cols, str):
+        cont_group_cols = [cont_group_cols]
+
     masks = {}
 
     for gcol, gbins in zip(cont_group_cols, n_bins):
@@ -114,6 +117,9 @@ def generate_categorical_masks(prs_dataset, cat_group_cols, min_group_size=30):
 
     prs_dataset.set_backend("numpy")
 
+    if isinstance(cat_group_cols, str):
+        cat_group_cols = [cat_group_cols]
+
     masks = {}
 
     for gcol in cat_group_cols:
@@ -137,6 +143,15 @@ def generate_categorical_masks(prs_dataset, cat_group_cols, min_group_size=30):
             if msk.sum() < min_group_size:
                 print(f"> Skipping {gcol}={cat} as it contains less than {min_group_size} samples.")
                 continue
+
+            # If the category is a numeric value, first check that it can be converted
+            # to an integer and then convert to a string:
+            try:
+                if float(cat) == int(cat):
+                    cat = str(int(cat))
+            except ValueError:
+                pass
+
             masks[gcol][cat] = msk
 
     return masks

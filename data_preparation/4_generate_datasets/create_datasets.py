@@ -8,7 +8,12 @@ import argparse
 from model.PRSDataset import PRSDataset
 
 
-def create_prs_dataset(biobank, phenotype, pcs_source):
+def create_prs_dataset(biobank,
+                       phenotype,
+                       pcs_source,
+                       ancestry_source,
+                       ancestry_subset=None,
+                       ):
 
     # Read the phenotype file for individuals in this biobank:
     pheno_df = pd.read_csv(f"data/phenotypes/{biobank}/{phenotype}.txt",
@@ -36,25 +41,37 @@ def create_prs_dataset(biobank, phenotype, pcs_source):
     # Read the cluster interpretation file (i.e. map the cluster ID to names / descriptions):
     cluster_interp = pd.read_csv(f"tables/metadata/{biobank}/cluster_interpretation.csv",
                                  index_col=0, header=0)
-    # Read the ancestry assignments (from gnomAD random forest classifier) for individuals in this Biobank:
-    gnomad_ancestry = pd.read_csv(f"data/covariates/{biobank}/gnomad_ancestry_assignments.txt",
-                                  sep="\t", header=0)
+    # Read the ancestry assignments for individuals in this Biobank:
+    ancestry_df = pd.read_csv(f"data/covariates/{biobank}/{ancestry_source}_ancestry_assignments.txt",
+                              sep="\t", header=0)
+
+    if ancestry_source == 'gnomad':
+        ancestry_df.rename(columns={'ancestry': 'Ancestry'}, inplace=True)
 
     # Merge the cluster assignment with the cluster interpretation files:
     cluster_merged = cluster_assignment.merge(cluster_interp, on='Cluster')
-    cluster_merged = cluster_merged.merge(gnomad_ancestry, on=['FID', 'IID'], how='right')
+    cluster_merged = cluster_merged.merge(ancestry_df, on=['FID', 'IID'], how='right')
 
-    cluster_merged = cluster_merged[['FID', 'IID', 'Description',
-                                     'afr', 'ami', 'amr', 'asj', 'eas', 'fin',
-                                     'mid', 'nfe', 'oth', 'sas', 'ancestry']]
-    cluster_merged.rename(columns={'Description': 'UMAP_Cluster', 'ancestry': 'Ancestry'}, inplace=True)
+    ancestry_cols = [col for col in ancestry_df.columns if col not in ('FID', 'IID')]
+
+    cluster_merged = cluster_merged[['FID', 'IID', 'Description'] + ancestry_cols]
+    cluster_merged.rename(columns={'Description': 'UMAP_Cluster'}, inplace=True)
 
     # Merge the cluster information with the scores dataframe:
     score_df = score_df.merge(cluster_merged, on=['FID', 'IID'], how='left')
 
-    score_df['Ancestry'] = score_df['Ancestry'].fillna('oth')
+    score_df['Ancestry'] = score_df['Ancestry'].fillna('OTH')
     score_df['UMAP_Cluster'] = score_df['UMAP_Cluster'].fillna('N/A')
     score_df.fillna(0., inplace=True)
+
+    # If the user requested subsetting to particular ancestry groups,
+    # then we do that here:
+    if ancestry_subset is not None:
+
+        if isinstance(ancestry_subset, str):
+            ancestry_subset = [ancestry_subset]
+
+        score_df = score_df.loc[score_df['Ancestry'].isin(ancestry_subset)]
 
     # ----------------------------------------------------------
     # Process covariates for individuals in this biobank:
@@ -77,11 +94,13 @@ def create_prs_dataset(biobank, phenotype, pcs_source):
     assert len(score_df) > 0, "No samples left after merging dataframes and purging missing values!"
     print("Final number of samples in the PRS dataset:", len(score_df))
 
+    print("> Phenotype descriptive statistics:")
+    print(score_df[phenotype].describe())
+
     return PRSDataset(
         score_df,
         phenotype,
-        meta_cols=['FID', 'IID', 'UMAP_Cluster', 'afr', 'ami', 'amr', 'asj', 'eas',
-                   'fin', 'mid', 'nfe', 'oth', 'sas', 'Ancestry'],
+        meta_cols=['FID', 'IID', 'UMAP_Cluster'] + ancestry_cols,
         covariates_cols=covariates_cols,
         prs_cols=prs_cols
     )
@@ -98,9 +117,12 @@ if __name__ == '__main__':
                         help='The name of the biobank to create the PRS dataset for.')
     parser.add_argument('--phenotype', dest='phenotype', type=str, required=True,
                         help='The name of the phenotype to create the PRS dataset for.')
-    parser.add_argument('--pcs-source', dest='pcs_source', type=str, default='gnomad',
-                        choices={'gnomad', 'cartagene', 'ukbb'},
+    parser.add_argument('--pcs-source', dest='pcs_source', type=str, default='1kghdp',
+                        choices={'gnomad', 'cartagene', 'ukbb', '1kghdp'},
                         help='The source of the principal components.')
+    parser.add_argument('--ancestry-source', dest='ancestry_source', type=str, default='1kghdp',
+                        choices={'gnomad', '1kghdp'},
+                        help='The source of the ancestry assignments.')
     parser.add_argument('--data-suffix', dest='data_suffix', type=str, default='',
                         help='The suffix to append to the processed data files (default: "").')
     parser.add_argument('--prop-test', dest='prop_test', type=float, default=0.3,
@@ -115,7 +137,7 @@ if __name__ == '__main__':
 
     print(f'> Creating PRS dataset for {args.phenotype} among {args.biobank} participants...')
 
-    prs_dataset = create_prs_dataset(args.biobank, args.phenotype, args.pcs_source)
+    prs_dataset = create_prs_dataset(args.biobank, args.phenotype, args.pcs_source, args.ancestry_source)
 
     print(f"> Saving processed data to: data/harmonized_data/{args.phenotype}/{args.biobank}/")
     makedir(f"data/harmonized_data/{args.phenotype}/{args.biobank}/")

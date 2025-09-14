@@ -1,61 +1,61 @@
 import pandas as pd
+import os.path as osp
 
-MODEL_NAME_GNOMAD_ANCESTRY_MAP = {
-    'PGS003843': 'nfe',
-    'PGS003845': 'afr',
-    'PGS002313': 'nfe',
-    'PGS002360': 'eas',
 
-    'PGS003864': 'amr',
-    'PGS003862': 'nfe',
-    'PGS003863': 'afr',
-    'PGS003865': 'eas',
+MODEL_NAME_ANCESTRY_MAP = {
+    'PGS003843': 'EUR',
+    'PGS003845': 'AFR',
+    'PGS002360': 'EAS',
 
-    'PGS002800': 'sas',
-    'PGS002801': 'afr',
-    'PGS002803': 'eas',
-    'PGS002804': 'nfe',
-    'PGS002805': 'amr',
+    'PGS003864': 'AMR',
+    'PGS003862': 'EUR',
+    'PGS003863': 'AFR',
+    'PGS003865': 'EAS',
 
-    'PGS000894': 'amr',
-    'PGS000896': 'sas',
-    'PGS000890': 'eas',
-    'PGS000886': 'afr',
-    'PGS000892': 'nfe',
+    'PGS002800': 'CSA',
+    'PGS002801': 'AFR',
+    'PGS002803': 'EAS',
+    'PGS002804': 'EUR',
+    'PGS002805': 'AMR',
 
-    'PGS003770': 'afr',
-    'PGS003775': 'eas',
-    'PGS003780': 'sas',
-    'PGS003768': 'nfe',
+    'PGS000894': 'AMR',
+    'PGS000896': 'CSA',
+    'PGS000890': 'EAS',
+    'PGS000886': 'AFR',
+    'PGS000892': 'EUR',
 
-    'PGS000806': 'afr',
-    'PGS000805': 'nfe',
-    'PGS000808': 'amr',
+    'PGS003770': 'AFR',
+    'PGS003775': 'EAS',
+    'PGS003780': 'CSA',
+    'PGS003768': 'EUR',
 
-    'PGS002311': 'nfe',
-    'PGS002358': 'eas',
+    'PGS000806': 'AFR',
+    'PGS000805': 'EUR',
+    'PGS000808': 'AMR',
+
+    'PGS002311': 'EUR',
+    'PGS002358': 'EAS',
 }
 
-df = pd.read_csv("tables/phenotype_prs_table.csv")
-MODEL_NAME_MAP = dict(zip(df['PGSCatalog_ID'], df['Training_cohort']))
+df = pd.read_csv(osp.join(osp.dirname(osp.dirname(__file__)), "tables/phenotype_prs_table.csv"))
+MODEL_NAME_MAP = dict(zip(df['PGS'], df['Training_cohort']))
+PHENOTYPE_NAME_MAP = dict(zip(df['Phenotype_short'], df['Phenotype']))
+BIOBANK_NAME_MAP = {
+    'ukbb': 'UK Biobank',
+    'cartagene': 'CARTaGENE',
+}
 
+BIOBANK_NAME_MAP_SHORT = {
+    'ukbb': 'UKB',
+    'cartagene': 'CaG',
+}
 
 GROUP_MAP = {
-    'afr': 'AFR',
-    'eas': 'EAS',
-    'mid': 'MID',
-    'nfe': 'EUR',
-    'sas': 'SAS',
-    'asj': 'ASJ',
-    'ami': 'AMI',
-    'amr': 'AMR',
-    'fin': 'FIN',
-    'oth': 'OTH',
     '0': 'Female',
     '1': 'Male'
 }
 
-SORTED_ANCESTRY_LABEL = ['All', 'EUR', 'MID', 'FIN', 'ASJ', 'AMR', 'OTH', 'SAS', 'EAS', 'AFR']
+SORTED_ANCESTRY_LABEL = ['All', 'EUR', 'MID', 'CSA', 'EAS', 'AMR', 'AFR', 'OTH']
 
 UKBB_SORTED_UMAP_CLUSTERS = [
     'All',
@@ -106,8 +106,25 @@ CARTAGENE_SORTED_UMAP_CLUSTERS = [
     '0-HAI-CAR'
 ]
 
+def assign_ancestry_consistent_colors(groups, palette='Set3'):
+    """
+    Assign consistent colors to the ancestry groups for plotting.
+    :param groups: A list of ancestry group names
+    :param palette: The color palette to use
+    :return: A dictionary of group names and colors
+    """
+    import seaborn as sns
 
-def assign_models_consistent_colors(models, palette='Set2'):
+    if isinstance(groups, str):
+        groups = [groups]
+
+    colors = sns.color_palette(palette, len(SORTED_ANCESTRY_LABEL[1:]))
+    color_dict = dict(zip(SORTED_ANCESTRY_LABEL[1:], colors))
+
+    return {k: color_dict[k] for k in groups if k in color_dict}
+
+
+def assign_models_consistent_colors(models, palette='Set3'):
     """
     Assign consistent colors to the models for plotting.
     :param models: A list of model names
@@ -116,12 +133,20 @@ def assign_models_consistent_colors(models, palette='Set2'):
     """
     import seaborn as sns
 
-    baseline_ancestry_model_names = ['ALL', 'AFR', 'AMR', 'EAS', 'EUR', 'SAS', 'Random']
+    if isinstance(models, str):
+        models = [models]
+
+    baseline_ancestry_model_names = ['EUR', 'EAS', 'CSA', 'AFR', 'ALL', 'AMR', 'FIXEDPRS']
     ancestry_colors = sns.color_palette(palette, len(baseline_ancestry_model_names))
 
     colors = dict(zip(baseline_ancestry_model_names, ancestry_colors))
 
-    remaining_models = sorted(list(set(MODEL_NAME_MAP.values()) - set(baseline_ancestry_model_names)))
+    colors['Male'] = '#A1BE95'
+    colors['Female'] = '#F98866'
+    colors['MoEPRS'] = '#375E97'
+    colors['MultiPRS'] = '#FFBB00'
+
+    remaining_models = sorted(list(set(MODEL_NAME_MAP.values()) - set(colors.keys())))
     remaining_colors = sns.color_palette(palette, len(remaining_models))
 
     colors.update(dict(zip(remaining_models, remaining_colors)))
@@ -141,7 +166,7 @@ def sort_groups(groups):
         return sorted(groups)
 
 
-def read_transform_eval_metrics(file_path):
+def read_eval_metrics(file_path):
     """
     Read the evaluation metrics from a CSV file and transform the names
     of the models + the phenotype for the purposes of plotting.
@@ -152,6 +177,11 @@ def read_transform_eval_metrics(file_path):
 
     eval_df['Phenotype'] = phenotype_id
     eval_df['Test biobank'] = file_path.split('/')[-2].upper()
+
+    return eval_df
+
+
+def transform_eval_metrics(eval_df):
 
     def map_model_name(x):
         try:
@@ -168,6 +198,26 @@ def read_transform_eval_metrics(file_path):
             except KeyError as e:
                 return m + f' ({biobank})'
         except ValueError as e:
+            try:
+                return MODEL_NAME_MAP[x]
+            except Exception as e:
+                return x
+
+    def assign_training_cohort(x):
+        try:
+            biobank, rest = x.split('/')
+            _, rest = rest.split(':')
+
+            if rest in (pd.Series(MODEL_NAME_MAP.keys()) + '-covariates').values:
+                m = rest.replace('-covariates', '')
+            else:
+                m = rest
+
+            try:
+                return MODEL_NAME_MAP[m]
+            except KeyError as e:
+                return m
+        except ValueError as e:
             return x
 
     def map_dataset_name(x):
@@ -178,7 +228,6 @@ def read_transform_eval_metrics(file_path):
             else:
                 return None
         except Exception as e:
-            print(e)
             return x
 
     def assign_training_biobank(x):
@@ -189,7 +238,6 @@ def read_transform_eval_metrics(file_path):
             else:
                 return None
         except Exception as e:
-            print(e)
             return x
 
     def assign_model_category(x):
@@ -211,16 +259,17 @@ def read_transform_eval_metrics(file_path):
 
     eval_df['Training biobank'] = eval_df['PGS'].apply(assign_training_biobank)
     eval_df['Training dataset'] = eval_df['PGS'].apply(map_dataset_name)
+    eval_df['Training cohort'] = eval_df['PGS'].apply(assign_training_cohort)
     eval_df['Model Name'] = eval_df['PGS'].apply(map_model_name)
     eval_df['Model Category'] = eval_df['PGS'].apply(assign_model_category)
 
     def map_group_name(x):
         try:
             return GROUP_MAP[x]
-        except KeyError:
+        except Exception:
             return x
 
-    eval_df['EvalGroup'] = eval_df['EvalGroup'].apply(map_group_name)
+    eval_df['EvalGroup'] = eval_df['EvalGroup'].astype(str).apply(map_group_name)
     eval_df.rename(columns={'EvalGroup': 'Evaluation Group'}, inplace=True)
 
     return eval_df

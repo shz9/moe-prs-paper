@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+from plot_utils import assign_models_consistent_colors, MODEL_NAME_MAP
 
 
 def plot_loss_curves(model):
@@ -37,29 +38,34 @@ def plot_scatter(prs_dataset,
                  vmax=None):
 
     if model_subset is None:
-        model_subset = prs_dataset.expert_ids
+        model_subset = prs_dataset.prs_cols
 
     if sample_mask is None:
         sample_mask = np.arange(prs_dataset.N)
 
-    model_idx = [list(prs_dataset.expert_ids).index(x)
-                 for x in model_subset if x in prs_dataset.expert_ids]
+    model_idx = [list(prs_dataset.prs_cols).index(x)
+                 for x in model_subset if x in prs_dataset.prs_cols]
 
-    pheno = prs_dataset.get_phenotype()[sample_mask]
-    m_preds = prs_dataset.get_expert_predictions()[sample_mask, :]
+    pheno = prs_dataset.get_phenotype().flatten()[sample_mask]
+    m_preds = prs_dataset.get_prs_predictions()[sample_mask, :]
 
     for m, m_idx in zip(model_subset, model_idx):
+
+        model_name = MODEL_NAME_MAP.get(m, m)
+
         plt.scatter(pheno, m_preds[:, m_idx], c=c, vmin=vmin, vmax=vmax,
-                    label=f'{m} (r={np.corrcoef(pheno, m_preds[:, m_idx])[0, 1]:.2}, '
-                          f'MSE={np.mean((pheno-m_preds[:, m_idx])**2):.2})',
-                    alpha=0.5)
+                    label=f'{model_name} (r={np.corrcoef(pheno, m_preds[:, m_idx])[0, 1]:.2}, '
+                          f'MSE={np.mean((pheno-m_preds[:, m_idx])**2):.2}, '
+                          f'Mean={np.mean(m_preds[:, m_idx]):.2})',
+                    alpha=0.1)
 
     if other_predictors is not None:
         for m in other_predictors.columns:
             opred = other_predictors[m].values[sample_mask]
             plt.scatter(pheno, opred, c=c, vmin=vmin, vmax=vmax,
                         label=f'{m} (r={np.corrcoef(pheno, opred)[0, 1]:.2}, '
-                              f'MSE={np.mean((pheno-opred)**2):.2})',
+                              f'MSE={np.mean((pheno-opred)**2):.2}, '
+                              f'Mean={np.mean(opred):.2})',
                         alpha=0.5)
 
     plt.xlabel("Phenotype")
