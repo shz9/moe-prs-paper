@@ -14,7 +14,7 @@ pre-trained polygenic scores (inferred from various biobanks or strata) as well 
 for a validation dataset and learns to assign individuals the best scores for them in a personalized-manner.
 
 <div style="text-align: center;">
-    <img src="figures/moe_diagram.png" alt="Graph" width="500"/>
+    <img src="moe_diagram.png" alt="Graph" width="500"/>
 </div>
 
 To get an intuitive understanding of what the `MoEPRS` model is set up to do, please check the 
