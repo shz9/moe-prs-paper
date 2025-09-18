@@ -131,4 +131,16 @@ graphs highlighted in the text. If you're interested in experimenting with the P
 
 ## Citation
 
-Coming soon...
+```
+@article {Zabad2025.09.15.676165,
+	author = {Zabad, Shadi and Li, Yue and Gravel, Simon},
+	title = {Personalized polygenic risk prediction and assessment with a Mixture-of-Experts framework},
+	elocation-id = {2025.09.15.676165},
+	year = {2025},
+	doi = {10.1101/2025.09.15.676165},
+	publisher = {Cold Spring Harbor Laboratory},
+	URL = {https://www.biorxiv.org/content/early/2025/09/17/2025.09.15.676165},
+	eprint = {https://www.biorxiv.org/content/early/2025/09/17/2025.09.15.676165.full.pdf},
+	journal = {bioRxiv}
+}
+```
