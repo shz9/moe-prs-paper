@@ -22,7 +22,9 @@ from moe import MoEPRS
 from plot_pgs_admixture import plot_admixture_graphs
 from plot_predictive_performance import postprocess_metrics_df
 from plot_utils import (
+    BIOBANK_NAME_MAP_SHORT,
     MODEL_NAME_MAP,
+    PHENOTYPE_NAME_MAP,
     assign_ancestry_consistent_colors,
     assign_models_consistent_colors,
     read_eval_metrics,
@@ -254,44 +256,46 @@ def plot_mixing_weight_comparison(biobank="ukbb"):
 
 
 def extract_accuracy_data(
+    moe_model_name,
+    phenotype="HEIGHT",
     test_biobank="ukbb",
     metric="Incremental_R2",
     dataset="test_data",
     evaluation_category="Ancestry",
 ):
     # Extract accuracy metrics:
-    f = f"data/evaluation/HEIGHT/{test_biobank}/{dataset}.csv"
+    f = f"data/evaluation/{phenotype}/{test_biobank}/{dataset}.csv"
     df = transform_eval_metrics(read_eval_metrics(f))
 
     df = df.loc[
         (df["Model Category"] != "MoE")
         | df["Model Name"].isin(
             [
-                f"{args.moe_model} (ukbb)",
-                f"{args.moe_model} (cartagene)",
+                f"{moe_model_name} (ukbb)",
+                f"{moe_model_name} (cartagene)",
             ]
         )
     ]
 
     df = df.loc[
-        (df["Model Category"] == "MoE")
-        | (df["Model Category"] == "MultiPRS")
+        df["Model Category"].isin(
+            ["MoE", "MultiPRS", "AncestryWeightedPRS"]
+        )  # <- Ensemble model categories
         | (df["Training biobank"] == test_biobank.upper())
     ]
 
-    # Rename the models for clarity:
-    df["Model Name"] = df["Model Name"].str.replace(
-        f"{args.moe_model} (ukbb)", "MoEPRS (UKB)", regex=False
-    )
-    df["Model Name"] = df["Model Name"].str.replace(
-        f"{args.moe_model} (cartagene)", "MoEPRS (CaG)", regex=False
-    )
-    df["Model Name"] = df["Model Name"].str.replace(
-        "MultiPRS (ukbb)", "MultiPRS (UKB)", regex=False
-    )
-    df["Model Name"] = df["Model Name"].str.replace(
-        "MultiPRS (cartagene)", "MultiPRS (CaG)", regex=False
-    )
+    # Rename the ensemble models for clarity:
+    for m, m_new in {
+        moe_model_name: "MoEPRS",
+        "MultiPRS": "MultiPRS",
+        "AncestryWeightedPRS": "AncestryWeightedPRS",
+    }.items():
+        df["Model Name"] = df["Model Name"].str.replace(
+            f"{m} (ukbb)", f"{m_new} (UKB)", regex=False
+        )
+        df["Model Name"] = df["Model Name"].str.replace(
+            f"{m} (cartagene)", f"{m_new} (CaG)", regex=False
+        )
 
     dfs = postprocess_metrics_df(
         df,
@@ -302,8 +306,8 @@ def extract_accuracy_data(
         include_cohort_matched=True,
     )
 
-    dfs["Phenotype"] = "Standing Height"
-    dfs["Phenotype"] += {"ukbb": " (UKB)", "cartagene": " (CaG)"}[test_biobank]
+    dfs["Phenotype"] = PHENOTYPE_NAME_MAP[phenotype]
+    dfs["Phenotype"] += f" ({BIOBANK_NAME_MAP_SHORT[test_biobank]})"
 
     return dfs
 
@@ -385,7 +389,7 @@ if __name__ == "__main__":
         "--moe-model",
         dest="moe_model",
         type=str,
-        default="MoE-global-int",
+        default="MoE-GS",
         help="The name of the MoE model to plot as reference.",
     )
 

@@ -9,23 +9,18 @@ suppressPackageStartupMessages({
 })
 
 ##########################
-# Map file paths — edit these
-##########################
-
-PHECODE_MAP_RDS       <- "data/phewas/phecode_map.rds"        # tibble: vocabulary_id, code, phecode
-PHECODE_MAP_ICD10_RDS <- "data/phewas/phecode_map_icd10.rds"  # tibble: vocabulary_id, code, phecode
-
-##########################
 # CLI options
 ##########################
 
 option_list <- list(
   make_option(c("-f","--ukb-file"),  type="character", default=NULL,
               help="Path to UKB wide-format CSV"),
+  make_option(c("--withdrawn-file"),  type="character", default=NULL,
+              help="Path to the file with the IDs of withdrawn individuals."),
   make_option(c("-p","--phecodes"), type="character", default=NULL,
               help="Comma-separated list of phecodes"),
   make_option(c("-n","--phenotype-names"), type="character", default=NULL,
-                help="Comma-separated names for phenotypes (same order as --phecodes)"),
+              help="Comma-separated names for phenotypes (same order as --phecodes). Repeated phenotype names are allowed."),
   make_option(c("-o","--outdir"),   type="character", default="data/ukbb-selected-phecodes",
               help="Output directory"),
   make_option(c("--include-cancer"),       action="store_true", default=FALSE,
@@ -33,7 +28,7 @@ option_list <- list(
   make_option(c("--include-selfreported"), action="store_true", default=FALSE,
               help="Include self-reported fields (20002 + coding609)"),
   make_option(c("--apply-phecode-exclusion"), action="store_true", default=FALSE,
-            help="Apply phecode exclusions")
+              help="Apply phecode exclusions")
 )
 
 opt <- parse_args(OptionParser(option_list = option_list))
@@ -42,16 +37,17 @@ if (is.null(opt$`ukb-file`) || is.null(opt$phecodes)) {
   stop("Usage: Rscript prepare-selected-phecodes-cli.R -f ukb.csv -p 411.2,274 [--include-cancer] [--include-selfreported]")
 }
 
-ukb_csv              <- opt$`ukb-file`
-phecodes_requested   <- unlist(strsplit(opt$phecodes, ",\\s*"))
-out_dir              <- opt$outdir
-include_cancer       <- opt$`include-cancer`
+ukb_csv <- opt$`ukb-file`
+phecodes_requested <- unlist(strsplit(opt$phecodes, ",\\s*"))
+out_dir <- opt$outdir
+include_cancer <- opt$`include-cancer`
 include_selfreported <- opt$`include-selfreported`
 apply_phecode_exclusions <- opt$`apply-phecode-exclusion`
 dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
 
 ##########################
-# Parse phenotype names (if passed)
+# Parse phenotype names
+##########################
 
 if (!is.null(opt$`phenotype-names`)) {
   phenotype_names <- unlist(strsplit(opt$`phenotype-names`, ",\\s*"))
@@ -62,42 +58,19 @@ if (!is.null(opt$`phenotype-names`)) {
   phenotype_names <- phecodes_requested
 }
 
-##########################
-# Load mapping tables
-##########################
+# Build mapping from phenotype name -> all associated phecodes
+phenotype_map <- tibble(
+  phecode = phecodes_requested,
+  phenotype = phenotype_names
+) %>%
+  group_by(phenotype) %>%
+  summarise(
+    phecodes = list(unique(phecode)),
+    .groups = "drop"
+  )
 
-# NOTE: Download from: https://phewascatalog.org/phewas/
-phecode_map1 <- as_tibble(read.csv("data/phewas/Phecode_map_v1_2_icd9_icd10cm.csv",
-  colClasses = c(ICD = "character",
-    Flag = "integer",
-    ICDString = "character",
-    Phecode = "character",
-    PhecodeString = "character",
-    PhecodeCategory = "character"
-)))
-
-# Add the vocabulary ID:
-phecode_map1 <- phecode_map1 %>% mutate(vocabulary_id = dplyr::case_when(
-  Flag %in% c(9L, 9)  ~ "ICD9CM",
-  Flag %in% c(10L,10) ~ "ICD10CM",
-  TRUE                ~ NA_character_
-))
-
-# Transform the ICD code:
-phecode_map1 <- mutate_at(phecode_map1, "ICD", ~ sub("\\.", "", .))
-
-# Keep the three columns:
-phecode_map1 <- phecode_map1 %>%
-  select(vocabulary_id = vocabulary_id,
-         code = ICD,
-         phecode = Phecode)
-
-
-# phecode_map       <- readRDS(PHECODE_MAP_RDS)
-# phecode_map_icd10 <- readRDS(PHECODE_MAP_ICD10_RDS)
-
-message("phecode_map rows: ", nrow(phecode_map1),
-        " | vocabs: ", paste(unique(phecode_map1$vocabulary_id), collapse=", "))
+message("phecode_map rows: ", nrow(phecode_map_icd10),
+        " | vocabs: ", paste(unique(phecode_map_icd10$vocabulary_id), collapse=", "))
 
 ##########################
 # Read UKB fields
@@ -114,13 +87,14 @@ icd10_select <- c(
   paste0("40002-1.", 0:13),
 
   # Hospital inpatient: primary, secondary, external causes
-  paste0("41201-0.", 0:21),   # external causes
-  paste0("41202-0.", 0:79),   # primary ICD10 diagnoses (array length ~79)
-  paste0("41204-0.", 0:209),  # secondary ICD10 diagnoses (array length — adjust if needed)
+  paste0("41201-0.", 0:21),         # external causes
+  paste0("41202-0.", 0:79),         # primary ICD10 diagnoses
+  paste0("41204-0.", 0:209),        # secondary ICD10 diagnoses
 
-  # Summary diagnoses (big array of distinct ICD10 codes)
-  paste0("41270-0.", 0:258)   # summary ICD10 diagnoses (array length ~259)
+  # Summary diagnoses
+  paste0("41270-0.", 0:258)         # summary ICD10 diagnoses
 )
+
 if (include_cancer) {
   icd10_select <- unique(c(icd10_select, paste0("40006-", 0:16, ".0")))
 }
@@ -130,24 +104,19 @@ df_ICD10 <- fread2(ukb_csv, colClasses = "character", select = icd10_select)
 if (include_selfreported) {
   # NOTE: Download from: https://biobank.ndph.ox.ac.uk/ukb/coding.cgi?id=609
   coding609 <- fread2("data/phewas/coding609.tsv")
-  sr_cols   <- c(paste0("20002-0.", 0:33), paste0("20002-1.", 0:33),
-                 paste0("20002-2.", 0:33), paste0("20002-3.", 0:33))
+  sr_cols <- c(paste0("20002-0.", 0:33), paste0("20002-1.", 0:33),
+               paste0("20002-2.", 0:33), paste0("20002-3.", 0:33))
   df_sr <- fread2(ukb_csv, colClasses = "character", select = sr_cols)
 
-  df_sr <- df_sr %>% mutate_all(~ as.character(factor(., levels = coding609$coding,
-    labels = coding609$meaning)))
+  df_sr <- df_sr %>%
+    mutate_all(~ as.character(factor(., levels = coding609$coding,
+                                     labels = coding609$meaning)))
 
   df_ICD10 <- bind_cols(df_ICD10, df_sr)
 }
 
-icd9_select <- paste0("41271-0.", 0:46)
-if (include_cancer) {
-  icd9_select <- unique(c(icd9_select, paste0("40013-", 0:14, ".0")))
-}
-df_ICD9 <- tryCatch(
-  fread2(ukb_csv, colClasses = "character", select = icd9_select),
-  error = function(e) data.frame()
-)
+# NOTE: Excluding ICD9 codes from the analysis for now.
+# In future, we may need to do the mapping using: phecode_icd9_rolled.csv
 
 ##########################
 # Wide -> long tibbles
@@ -171,16 +140,9 @@ build_long <- function(df, vocab_id) {
 }
 
 # vocabulary_id values must match exactly what is in phecode_map
-id_icd10_count <- build_long(df_ICD10, "ICD10CM")
+id_icd10_count <- build_long(df_ICD10, "ICD10")
 
-if (ncol(df_ICD9) > 0) {
-  id_icd9_count <- build_long(df_ICD9, "ICD9CM")
-} else {
-  id_icd9_count <- tibble(id = integer(0), vocabulary_id = character(0),
-                          code = character(0), count = integer(0))
-}
-
-codes_tab <- bind_rows(id_icd10_count, id_icd9_count)
+codes_tab <- id_icd10_count
 
 message("codes_tab rows: ", nrow(codes_tab),
         " | vocabs: ", paste(unique(codes_tab$vocabulary_id), collapse=", "))
@@ -190,10 +152,9 @@ message("codes_tab rows: ", nrow(codes_tab),
 ##########################
 
 phen_wide <- createPhenotypes(
-  codes_tab,
+  id_icd10_count,
   id.sex                 = tibble(id = seq_along(sex), sex = c("F","M")[sex + 1L]),
-  vocabulary.map         =phecode_map1, #mutate_at(phecode_map1,
-                            #   "code", ~ sub("\\.", "", .)),
+  vocabulary.map         = mutate_at(phecode_map_icd10, "code", ~ sub("\\.", "", .)),
   min.code.count         = 1,
   add.phecode.exclusions = apply_phecode_exclusions,
   full.population.ids    = seq_along(sex),
@@ -203,7 +164,7 @@ phen_wide <- createPhenotypes(
 phen_wide <- phen_wide[order(phen_wide$id), , drop = FALSE]
 
 ##########################
-# Select requested phecodes and write output
+# Select requested phecodes
 ##########################
 
 present <- intersect(phecodes_requested, colnames(phen_wide))
@@ -212,28 +173,86 @@ if (length(missing) > 0) warning("Missing phecodes: ", paste(missing, collapse =
 
 phen_selected <- phen_wide %>%
   select(all_of(c("id", present)))
+
 phen_selected$eid <- eid
 
-for (i in seq_along(phecodes_requested)) {
+##########################
+# Exclude withdrawn samples
+##########################
 
-  pc <- phecodes_requested[i]
-  fname <- phenotype_names[i]
+if (!is.null(opt$`withdrawn-file`)) {
+  withdrawn_df <- fread2(opt$`withdrawn-file`)
 
-  if (!pc %in% names(phen_selected)) next
+  message("> Removed data for withdrawn samples.")
+  message("> Sample size before: ", nrow(phen_selected))
+  phen_selected <- phen_selected %>%
+    filter(!eid %in% withdrawn_df$V1)
+  message("> Sample size after: ", nrow(phen_selected))
+}
 
-  out_df <- phen_selected %>%
-    select(eid, all_of(pc)) %>%
-    filter(!is.na(.data[[pc]])) %>%
-    transmute(FID = eid,
-              IID = eid,
-              PHENO = as.integer(.data[[pc]]))
+##########################
+# Helper: OR across multiple phecodes
+##########################
 
-  write.table(out_df,
-              file = file.path(out_dir, paste0(fname, ".txt")),
-              sep = "\t",
-              quote = FALSE,
-              row.names = FALSE,
-              col.names = FALSE)
+collapse_phecodes_or <- function(df, phecode_cols) {
+  if (length(phecode_cols) == 0) {
+    return(rep(NA_integer_, nrow(df)))
+  }
+
+  x <- df %>%
+    select(all_of(phecode_cols)) %>%
+    mutate(across(everything(), ~ suppressWarnings(as.numeric(.))))
+
+  x_mat <- as.matrix(x)
+
+  # True if any associated phecode is 1
+  any_case <- apply(x_mat == 1, 1, function(z) any(z, na.rm = TRUE))
+
+  # True only if every associated phecode is NA
+  all_na <- apply(is.na(x_mat), 1, all)
+
+  out <- ifelse(any_case, 1L, ifelse(all_na, NA_integer_, 0L))
+  as.integer(out)
+}
+
+##########################
+# Write one file per phenotype name
+##########################
+
+for (i in seq_len(nrow(phenotype_map))) {
+
+  fname <- phenotype_map$phenotype[i]
+  pcs <- phenotype_map$phecodes[[i]]
+
+  present_pcs <- intersect(pcs, names(phen_selected))
+  missing_pcs <- setdiff(pcs, names(phen_selected))
+
+  if (length(missing_pcs) > 0) {
+    warning("Phenotype '", fname, "' is missing phecodes: ", paste(missing_pcs, collapse = ", "))
+  }
+
+  if (length(present_pcs) == 0) next
+
+  pheno <- collapse_phecodes_or(phen_selected, present_pcs)
+
+  out_df <- tibble(
+    FID = phen_selected$eid,
+    IID = phen_selected$eid,
+    PHENO = pheno
+  ) %>%
+    filter(!is.na(PHENO))
+
+  safe_fname <- gsub("[[:space:]]+", "_", fname)
+  safe_fname <- gsub("[^A-Za-z0-9_\\-\\.]", "", safe_fname)
+
+  write.table(
+    out_df,
+    file = file.path(out_dir, paste0(safe_fname, ".txt")),
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE,
+    col.names = FALSE
+  )
 }
 
 message("Done. Output written to: ", out_dir)

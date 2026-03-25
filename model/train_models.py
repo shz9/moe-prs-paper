@@ -91,7 +91,9 @@ def train_baseline_linear_models(
     # ancestry labels in the dataset, then run the AncestryWeightedPRS model:
     if (
         len(
-            set(model_names.values()).intersection(set(dataset.data["Ancestry"]))
+            set(model_names.values()).intersection(
+                set(dataset.data["Ancestry"].unique())
+            )
         )
         >= 2
     ):
@@ -499,19 +501,25 @@ if __name__ == "__main__":
     if args.residualize_prs:
         prs_dataset.adjust_prs_for_covariates()
 
-    baseline_kwargs = parse_kv_args(args.baseline_kwargs)
-    moe_kwargs = parse_kv_args(args.moe_kwargs)
-    # moe_pytorch_kwargs = parse_kv_args(args.moe_pytorch_kwargs)
+    baseline_kwargs = {}
+    if len(args.baseline_kwargs) > 0:
+        baseline_kwargs = {
+            k: v
+            for k, v in [kw.split("=") for kw in args.baseline_kwargs.split(",")]
+            if v
+        }
 
-    if args.moe_pytorch_json and len(args.moe_pytorch_json.strip()) > 0:
-        moe_pytorch_kwargs = json.loads(args.moe_pytorch_json)
-    else:
-        moe_pytorch_kwargs = parse_kv_args(args.moe_pytorch_kwargs)
+    moe_pytorch_kwargs = {}
+    if len(args.moe_pytorch_kwargs) > 0:
+        moe_pytorch_kwargs = {
+            k: v
+            for k, v in [kw.split("=") for kw in args.moe_pytorch_kwargs.split(",")]
+            if v
+        }
 
-    trained_models, model_runtimes= train_all_models(
+    trained_models, model_runtimes = train_all_models(
         prs_dataset,
         baseline_kwargs,
-        moe_kwargs=moe_kwargs,
         skip_baseline=args.skip_baseline,
         skip_moe=args.skip_moe,
         pytorch_only=args.pytorch_only,

@@ -18,7 +18,7 @@ def create_prs_dataset(
     # Read the phenotype file for individuals in this biobank:
     pheno_df = pd.read_csv(
         f"data/phenotypes/{biobank}/{phenotype}.txt",
-        sep=r"\s+",
+        sep=r"\t",
         names=["FID", "IID", phenotype],
     )
     # Drop individuals with missing phenotype information:
@@ -27,9 +27,7 @@ def create_prs_dataset(
     print("> Number of samples with valid measurements:", len(pheno_df))
 
     # Read the csv file containing the PRS scores for this phenotype and biobank:
-    score_df = pd.read_csv(
-        f"data/scores/{phenotype.replace('_adj', '')}/{biobank}.csv.gz", sep=r"\s+"
-    )
+    score_df = pd.read_csv(f"data/scores/{phenotype}/{biobank}.csv.gz", sep=r"\s+")
 
     prs_cols = [col for col in score_df.columns if col not in ("FID", "IID")]
 
@@ -128,6 +126,14 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--id",
+        dest="analysis_id",
+        type=str,
+        required=True,
+        help="The ID for the analysis associated with the dataset.",
+    )
+
+    parser.add_argument(
         "--biobank",
         dest="biobank",
         type=str,
@@ -186,7 +192,7 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
 
     print(
-        f"> Creating PRS dataset for {args.phenotype} among {args.biobank} participants..."
+        f"> Creating PRS dataset for {args.analysis_id} among {args.biobank} participants..."
     )
 
     prs_dataset = create_prs_dataset(
@@ -194,21 +200,21 @@ if __name__ == "__main__":
     )
 
     print(
-        f"> Saving processed data to: data/harmonized_data/{args.phenotype}/{args.biobank}/"
+        f"> Saving processed data to: data/harmonized_data/{args.analysis_id}/{args.biobank}/"
     )
-    makedir(f"data/harmonized_data/{args.phenotype}/{args.biobank}/")
+    makedir(f"data/harmonized_data/{args.analysis_id}/{args.biobank}/")
 
     # Save the entire dataset:
     prs_dataset.save(
-        f"data/harmonized_data/{args.phenotype}/{args.biobank}/full_data{args.data_suffix}.pkl"
+        f"data/harmonized_data/{args.analysis_id}/{args.biobank}/full_data{args.data_suffix}.pkl"
     )
 
     # Split the dataset into training and testing sets:
     train_data, test_data = prs_dataset.train_test_split(test_size=args.prop_test)
 
     train_data.save(
-        f"data/harmonized_data/{args.phenotype}/{args.biobank}/train_data{args.data_suffix}.pkl"
+        f"data/harmonized_data/{args.analysis_id}/{args.biobank}/train_data{args.data_suffix}.pkl"
     )
     test_data.save(
-        f"data/harmonized_data/{args.phenotype}/{args.biobank}/test_data{args.data_suffix}.pkl"
+        f"data/harmonized_data/{args.analysis_id}/{args.biobank}/test_data{args.data_suffix}.pkl"
     )

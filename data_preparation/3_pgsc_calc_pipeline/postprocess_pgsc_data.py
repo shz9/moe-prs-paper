@@ -105,7 +105,7 @@ def extract_pgsc_ancestry(biobank):
     )
 
 
-def extract_pgsc_scores(biobank):
+def extract_pgsc_scores(biobank, pgs_table):
     """
     Postprocess the PRS scores obtained from the PGSC pipeline.
     """
@@ -130,24 +130,24 @@ def extract_pgsc_scores(biobank):
         for col in pgs_df.columns
     ]
 
-    # Read the table mapping phenotypes to PGS IDs:
-    pheno_df = pd.read_csv("tables/phenotype_prs_table.csv")
-    # Create a dictionary mapping phenotype name (`Phenotype_short`) to list of PGS IDs:
-    pheno_map = pheno_df.groupby("Phenotype_short")["PGS"].apply(list).to_dict()
+    # Read the table mapping AnalysisID to PGS IDs:
+    meta_table = pd.read_csv(pgs_table)
+    # Create a dictionary mapping AnalysisID to list of PGS IDs:
+    analysis_map = meta_table.groupby("AnalysisID")["PGS"].apply(list).to_dict()
 
-    for pheno, pgss in pheno_map.items():
+    for an_id, pgss in analysis_map.items():
         pgs_cols = [col for col in pgss if col in pgs_df.columns]
 
         if len(pgs_cols) < 2:
             print(pgs_df.columns)
-            raise ValueError(f"No PGS scores found for {pheno} in {biobank}.")
+            raise ValueError(f"No PGS scores found for {an_id} in {biobank}.")
 
         pgs_df_subset = pgs_df[["FID", "IID"] + pgs_cols]
 
-        makedir(f"data/scores/{pheno}/")
+        makedir(f"data/scores/{an_id}/")
 
         pgs_df_subset.to_csv(
-            f"data/scores/{pheno}/{biobank}.csv.gz", sep="\t", index=False
+            f"data/scores/{an_id}/{biobank}.csv.gz", sep="\t", index=False
         )
 
 
@@ -155,6 +155,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Postprocess pgsc_calc data to prepare for meta PRS pipeline."
     )
+
+    parser.add_argument(
+        "--pgs-phenotype-table",
+        dest="pgs_table",
+        type=str,
+        required=True,
+        help="Path to a CSV file containing the columns mapping PGS to phenotypes.",
+    )
+
     parser.add_argument(
         "--biobank",
         dest="biobank",

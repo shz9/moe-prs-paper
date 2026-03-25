@@ -1,22 +1,28 @@
 #!/bin/bash
 
+pgs_pheno_files=("tables/phenotype_prs_table.csv" "tables/multitrait_prs_table.csv")
 biobanks=("ukbb" "cartagene")
 prop_test=0.3  # Proportion of samples to use for testing
 
 source env/moe/bin/activate
 
-# Loop over biobanks:
-for biobank in "${biobanks[@]}"
+for file in "${pgs_pheno_files[@]}"
 do
-
-    mapfile -t phenotypes < <(
-        find "data/phenotypes/${biobank}" -type f -name '*.txt' -printf '%f\n' |
-        sed 's/\.txt$//' |
-        sort -u
-    )
-
-    for phenotype in "${phenotypes[@]}"
+    # Loop over biobanks:
+    for biobank in "${biobanks[@]}"
     do
-        python3 data_preparation/4_generate_datasets/create_datasets.py --biobank "$biobank" --phenotype "$phenotype" --pcs-source "1kghdp" --prop-test "$prop_test"
+
+        awk -F',' 'NR>1 {print $1 "," $3}' "$file" | sort -u | \
+        while IFS=',' read -r analysis_id phenotype; do
+            echo "Processing dataset for: $analysis_id | $biobank"
+
+            python3 data_preparation/4_generate_datasets/create_datasets.py \
+                --id "$analysis_id" \
+                --biobank "$biobank" \
+                --phenotype "$phenotype" \
+                --pcs-source "1kghdp" \
+                --prop-test "$prop_test"
+
+        done
     done
 done

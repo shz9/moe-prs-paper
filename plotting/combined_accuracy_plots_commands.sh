@@ -2,7 +2,7 @@
 
 source env/moe/bin/activate
 
-models=("MoE-global-int") # "MoE-fixed-resid-global-int")
+models=("MoE" "MoE-GS") # "MoE-fixed-resid-global-int")
 biobanks=("ukbb" "cartagene")
 
 for model in "${models[@]}"; do
