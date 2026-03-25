@@ -12,8 +12,11 @@ def generate_predictions(prs_dataset, models, use_only_prs=True):
     preds = {}
 
     for m_name, m in models.items():
-        if use_only_prs and m.expert_cols is not None:
-            preds[m_name] = m.predict_prs(prs_dataset).flatten()
+        if use_only_prs and getattr(m, "expert_cols", None) is not None:
+            if hasattr(m, "predict_prs"):
+                preds[m_name] = m.predict_prs(prs_dataset).flatten()
+            else:
+                preds[m_name] = m.predict(prs_dataset).flatten()
         else:
             preds[m_name] = m.predict(prs_dataset).flatten()
 
