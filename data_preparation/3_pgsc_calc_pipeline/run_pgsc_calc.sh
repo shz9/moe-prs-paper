@@ -16,7 +16,7 @@ module load apptainer
 # Options set by user:
 biobank=${1:-"cartagene"}
 target_build=${2:-"GRCh38"}
-scorefiles=${3:-"data/pgs_weights/*/${target_build}/*.txt.gz"}
+scorefiles=${3:-"data/pgs_weights/${target_build}/*.txt.gz"}
 output_dir=${4:-"data/pgsc_calc_scores/${biobank}/"}
 min_overlap=${5:-0.75}
 

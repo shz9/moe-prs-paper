@@ -64,7 +64,7 @@ def train_baseline_linear_models(
     if (
         len(
             set(model_names.values()).intersection(
-                set(dataset.data["Ancestry"]).unique()
+                set(dataset.data["Ancestry"].unique())
             )
         )
         >= 2
@@ -443,12 +443,6 @@ if __name__ == "__main__":
             if v
         }
 
-    moe_kwargs = {}
-    if len(args.moe_kwargs) > 0:
-        moe_kwargs = {
-            k: v for k, v in [kw.split("=") for kw in args.moe_kwargs.split(",")] if v
-        }
-
     moe_pytorch_kwargs = {}
     if len(args.moe_pytorch_kwargs) > 0:
         moe_pytorch_kwargs = {
@@ -460,7 +454,6 @@ if __name__ == "__main__":
     trained_models, model_runtimes = train_all_models(
         prs_dataset,
         baseline_kwargs,
-        moe_kwargs,
         skip_baseline=args.skip_baseline,
         skip_moe=args.skip_moe,
         pytorch_only=args.pytorch_only,

@@ -18,12 +18,24 @@ from utils import (
 cols_dict = {
     "file111": "IID",
     "sex_birth": "Sex",
-    "DIABETES_T2": "T2D",
     #'RES_MEASURED_FEV1': 'FEV1',
     #'RES_MEASURED_FVC': 'FVC',
     "RES_BODY_MASS_INDEX": "BMI",
     "CALC_AVG_HEIGHT_CM": "HEIGHT",
     "ASTHMA_OCCURRENCE": "ASTHMA",
+    "DIABETES_T1": "T1D",
+    "DIABETES_T2": "T2D",
+    # CAD related phenotypes:
+    "HEART_ATTACK_OCCURRENCE": "CAD1",
+    "ANGINA_OCCURRENCE": "CAD2",
+    "ATHEROSCLEROSIS_OCCURRENCE": "CAD3",
+    "HEART_DISEASE_OCCURRENCE": "CAD4",
+    # Stroke:
+    "STROKE_OCCURRENCE": "STR",
+    # Hypertension:
+    "HIGH_BP_OCCURRENCE": "HTN",
+    # Gout:
+    "GOUT_OCCURRENCE": "GOUT",
     #'HIGHEST_LVL_COMPLETED': 'EDU',
     "CALC_AVG_DIASTOLIC_BP": "DBP",
     "CALC_AVG_SYSTOLIC_BP": "SBP",
@@ -121,8 +133,9 @@ bmi.columns = ["FID", "IID", "phenotype"]
 # Remove samples with likely clerical errors:
 bmi.loc[(bmi["phenotype"] < 15) | (bmi["phenotype"] > 60), "phenotype"] = np.nan
 bmi = recode_nan(bmi)
+bmi["phenotype"] = np.log(bmi["phenotype"])
 bmi["phenotype"] = np.where(
-    detect_outliers(np.log(bmi["phenotype"]), stratify=pheno_df["Sex"]),
+    detect_outliers(bmi["phenotype"], stratify=pheno_df["Sex"]),
     np.nan,
     bmi["phenotype"],
 )
@@ -130,7 +143,7 @@ print("Body Mass Index")
 print(bmi["phenotype"].describe())
 print(pd.Series(zscore(bmi["phenotype"], nan_policy="omit")).describe())
 bmi.to_csv(
-    "data/phenotypes/cartagene/BMI.txt",
+    "data/phenotypes/cartagene/LOG_BMI.txt",
     sep="\t",
     index=False,
     header=False,
@@ -284,10 +297,12 @@ whr.to_csv(
 # --------------------------------------------------------------------------------
 # Binary phenotypes
 
+binary_nan = {2.0: 0.0, 9.0: np.nan, 99.0: np.nan, -7.0: np.nan, -9.0: np.nan}
+
 # Process data for ASTHMA:
 
 asthma = pheno_df[["FID", "IID", "ASTHMA"]].copy()
-asthma["ASTHMA"] = asthma["ASTHMA"].replace({2.0: 0.0, 9.0: np.nan, 99.0: np.nan})
+asthma["ASTHMA"] = asthma["ASTHMA"].replace(binary_nan)
 asthma.columns = ["FID", "IID", "phenotype"]
 print("Asthma")
 print(asthma["phenotype"].describe())
@@ -303,7 +318,7 @@ asthma.to_csv(
 # Process data for T2D:
 
 t2d = pheno_df[["FID", "IID", "T2D"]].copy()
-t2d["T2D"] = t2d["T2D"].replace({2.0: 0.0, 9.0: np.nan, 99.0: np.nan})
+t2d["T2D"] = t2d["T2D"].replace(binary_nan)
 t2d.columns = ["FID", "IID", "phenotype"]
 print("T2D")
 print(t2d["phenotype"].describe())
@@ -315,6 +330,78 @@ t2d.to_csv(
     na_rep="NA",
 )
 
+# -------------------------------------------------------
+# Process data for T1D:
+
+t1d = pheno_df[["FID", "IID", "T1D"]].copy()
+t1d["T1D"] = t1d["T1D"].replace(binary_nan)
+t1d.columns = ["FID", "IID", "phenotype"]
+print("T1D")
+print(t1d["phenotype"].describe())
+t1d.to_csv(
+    "data/phenotypes/cartagene/T1D.txt",
+    sep="\t",
+    index=False,
+    header=False,
+    na_rep="NA",
+)
+
+# -------------------------------------------------------
+# Process data for HTN:
+
+htn = pheno_df[["FID", "IID", "HTN"]].copy()
+htn["HTN"] = htn["HTN"].replace(binary_nan)
+htn.columns = ["FID", "IID", "phenotype"]
+print("HTN")
+print(htn["phenotype"].describe())
+htn.to_csv(
+    "data/phenotypes/cartagene/HTN.txt",
+    sep="\t",
+    index=False,
+    header=False,
+    na_rep="NA",
+)
+
+# -------------------------------------------------------
+# Process data for GOUT:
+
+gout = pheno_df[["FID", "IID", "GOUT"]].copy()
+gout["GOUT"] = gout["GOUT"].replace(binary_nan)
+gout.columns = ["FID", "IID", "phenotype"]
+print("GOUT")
+print(gout["phenotype"].describe())
+gout.to_csv(
+    "data/phenotypes/cartagene/GOUT.txt",
+    sep="\t",
+    index=False,
+    header=False,
+    na_rep="NA",
+)
+
+# -------------------------------------------------------
+# Process data for CAD:
+
+cad = pheno_df[["FID", "IID", "CAD1", "CAD2", "CAD3", "CAD4"]].copy()
+cad[["CAD1", "CAD2", "CAD3", "CAD4"]] = cad[["CAD1", "CAD2", "CAD3", "CAD4"]].replace(
+    binary_nan
+)
+cad["CAD"] = (
+    cad[["CAD1", "CAD2", "CAD3", "CAD4"]]
+    .sum(axis=1)
+    .clip(lower=0.0, upper=1.0)
+    .describe()
+)
+cad.drop(columns=["CAD1", "CAD2", "CAD3", "CAD4"], inplace=True)
+cad.columns = ["FID", "IID", "phenotype"]
+print("CAD")
+print(cad["CAD"].describe())
+cad.to_csv(
+    "data/phenotypes/cartagene/CAD.txt",
+    sep="\t",
+    index=False,
+    header=False,
+    na_rep="NA",
+)
 
 # --------------------------------------------------------------------------------
 # Blood biochemistry phenotypes
@@ -377,16 +464,17 @@ ldl.to_csv(
 hdl = blood_pheno_df[["FID", "IID", "HDL"]].copy()
 hdl.columns = ["FID", "IID", "phenotype"]
 hdl = recode_nan(hdl)
+hdl["phenotype"] = np.log(hdl["phenotype"])
 hdl["phenotype"] = np.where(
-    detect_outliers(np.log(hdl["phenotype"]), stratify=blood_pheno_df["Sex"]),
+    detect_outliers(hdl["phenotype"], stratify=blood_pheno_df["Sex"]),
     np.nan,
     hdl["phenotype"],
 )
-print("HDL")
+print("LOG_HDL")
 print(hdl["phenotype"].describe())
 print(pd.Series(zscore(hdl["phenotype"], nan_policy="omit")).describe())
 hdl.to_csv(
-    "data/phenotypes/cartagene/HDL.txt",
+    "data/phenotypes/cartagene/LOG_HDL.txt",
     sep="\t",
     index=False,
     header=False,
@@ -450,16 +538,17 @@ log_trig.to_csv(
 creatinine = blood_pheno_df[["FID", "IID", "CREATININE"]].copy()
 creatinine.columns = ["FID", "IID", "phenotype"]
 creatinine = recode_nan(creatinine)
+creatinine["phenotype"] = np.log(creatinine["phenotype"])
 creatinine["phenotype"] = np.where(
     detect_outliers(creatinine["phenotype"], stratify=blood_pheno_df["Sex"]),
     np.nan,
     creatinine["phenotype"],
 )
-print("Creatinine")
+print("Log Creatinine")
 print(creatinine["phenotype"].describe())
 print(pd.Series(zscore(creatinine["phenotype"], nan_policy="omit")).describe())
 creatinine.to_csv(
-    "data/phenotypes/cartagene/CRTN.txt",
+    "data/phenotypes/cartagene/LOG_CRTN.txt",
     sep="\t",
     index=False,
     header=False,

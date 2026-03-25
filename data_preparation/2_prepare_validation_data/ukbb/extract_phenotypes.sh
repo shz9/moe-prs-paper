@@ -6,7 +6,6 @@
 #SBATCH --output=./log/data_preparation/ukbb_phenotypes/%x.out
 #SBATCH --mail-user=shadi.zabad@mail.mcgill.ca
 #SBATCH --mail-type=FAIL
-#!/bin/bash
 
 source env/moe/bin/activate
 
@@ -17,10 +16,11 @@ mkdir -p "env/R_phewas_env" || true
 
 export R_LIBS="env/R_phewas_env"
 
-# WORK IN PROGRESS!!!
 Rscript data_preparation/2_prepare_validation_data/ukbb/extract_binary_phenotypes.R \
         -f "/project/rpp-aevans-ab/neurohub/UKB/Tabular/current.csv" \
-        -p 250.2,250.1,427.2,428,401,433.1,411.4,290.1,296.2,332,274.1,495 \
-        -n T2D,T1D,AF,HF,HTN,STR,CAD,DEM,MDD,PD,GOUT,ASTH \
-        -o "data/ukbb-selected-phecodes/" \
-        --include-selfreported
+        --withdrawn-file "/project/rpp-aevans-ab/neurohub/UKB/Withdrawals/w45551_20250818.csv" \
+        -p 250.2,250.1,427.2,428,401.1,411,290,332,274.1,495,433 \
+        -n T2D,T1D,AF,HF,HTN,CAD,DEM,PD,GOUT,ASTHMA,STR \
+        -o "data/phenotypes/ukbb/" \
+        --include-selfreported \
+        --apply-phecode-exclusion

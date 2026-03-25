@@ -982,10 +982,11 @@ class MoEPRS(object):
 
             self.history["NCLL"].append(self.complete_nll())
             self.history["model_params"].append(self._pack_all_params())
+            self.history["Ensemble Loss"].append(self.ensemble_loss())
+
             # self.history["Weighted Loss"].append(self.weighted_loss())
             # self.history["Weighted NLL"].append(self.weighted_nll())
             # self.history["Gate Loss"].append(self.gate_loss())
-            self.history["Ensemble Loss"].append(self.ensemble_loss())
             # self.history["Expert Losses"].append(self._expert_loss.mean(axis=0))
             # self.history["Model Weights"].append(
             #    self.expert_responsibility.mean(axis=0)

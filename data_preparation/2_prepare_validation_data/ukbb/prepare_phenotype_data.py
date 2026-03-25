@@ -1,4 +1,3 @@
-import itertools
 import os.path as osp
 import sys
 
@@ -22,21 +21,23 @@ pheno_dict = {
     "48-0.0": "WAIST",
     "49-0.0": "HIP",
     "50-0.0": "HEIGHT",
-    "21001-0.0": "BMI",
-    "30760-0.0": "HDL",
+    "21001-0.0": "LOG_BMI",
+    "30760-0.0": "LOG_HDL",
     "30780-0.0": "LDL",
     "30690-0.0": "TC",
     "30870-0.0": "LOG_TG",
     # "20151-0.0": "FVC",
     # "20150-0.0": "FEV1",
     # "20258-0.0": "FEV1_FVC",
-    "30700-0.0": "CRTN",
+    "30700-0.0": "LOG_CRTN",
     "30880-0.0": "URT",
-    "30850-0.0": "TST",
+    "30850-0.0": "LOG_TST",
     "4080-0.0": "SBP",
     "4079-0.0": "DBP",
     # "6138-0.0": "EDU",
 }
+
+component_phenotypes = ["48-0.0", "49-0.0"]
 
 # ------------------------------------------------------
 # Helper functions to transform some of the phenotypes:
@@ -58,6 +59,10 @@ def transform_education_years(dat):
 pheno_transform_func = {
     # "6138-0.0": transform_education_years,
     "30870-0.0": np.log,
+    "21001-0.0": np.log,
+    "30700-0.0": np.log,
+    "30760-0.0": np.log,
+    "30850-0.0": np.log,
 }
 
 pheno_adjust_func = {
@@ -67,7 +72,7 @@ pheno_adjust_func = {
     "4079-0.0": adjust_diastolic_blood_pressure_for_medication,
 }
 
-log_before_outlier_detection = ["21001-0.0", "30760-0.0", "20151-0.0", "20150-0.0"]
+log_before_outlier_detection = ["20151-0.0", "20150-0.0"]
 
 
 # ------------------------------------------------------
@@ -100,6 +105,9 @@ makedir("data/phenotypes/ukbb/")
 
 # Loop over the phenotypes, process them, and output to file:
 for pheno in pheno_dict.keys():
+    if pheno in component_phenotypes:
+        continue
+
     sub_pheno_df = pheno_df[["FID", "IID", pheno]].copy()
     sub_pheno_df.columns = ["FID", "IID", "phenotype"]
 
@@ -110,7 +118,8 @@ for pheno in pheno_dict.keys():
         )
 
     # Filter outliers in each sex separately:
-    # If the phenotype is skewed and positive, apply log transformation before outlier detection.
+    # If the phenotype is skewed and positive,
+    # apply log transformation before outlier detection.
     if pheno in log_before_outlier_detection:
         od_pheno = np.log(sub_pheno_df["phenotype"])
     else:
@@ -171,141 +180,4 @@ sub_pheno_df["phenotype"] = np.where(
 # Save phenotype:
 sub_pheno_df[["FID", "IID", "phenotype"]].to_csv(
     "data/phenotypes/ukbb/WHR.txt", sep="\t", index=False, header=False, na_rep="NA"
-)
-
-# Clean space for binary phenotype analyses:
-
-del pheno_df
-del sub_pheno_df
-del med_use_df
-
-# =============================================================================
-# Case/control phenotypes
-
-# Add ICD10 cause of death, primary + secondary
-icd10_cols = [f"40001-{i}.0" for i in range(2)] + [
-    f"40002-{i}.{j}" for i, j in itertools.product(range(2), range(14))
-]
-# Add ICD10 diagnoses, main + secondary
-icd10_cols += [f"41202-0.{i}" for i in range(80)] + [f"41204-0.{i}" for i in range(210)]
-general_illness_cols = [
-    f"20002-{i}.{j}" for i, j in itertools.product(range(2), range(34))
-]
-
-# Read the diagnosis codes:
-df_disease = pd.read_csv(
-    osp.join(ukb_homedir, "Tabular/current.csv"),
-    usecols=["eid"] + icd10_cols + general_illness_cols,
-)
-
-# Remove withdrawn individuals:
-df_disease = df_disease[~df_disease["eid"].isin(withdrawn_df["IID"])]
-df_disease.rename(columns={"eid": "IID"}, inplace=True)
-df_disease["FID"] = df_disease["IID"]
-
-# ------------------ Asthma ------------------
-
-# Extract index of individuals who have been diagnosed with asthma
-asthma_idx = np.where(
-    np.logical_or(
-        (df_disease[general_illness_cols] == 1111).any(axis=1),
-        df_disease[icd10_cols]
-        .select_dtypes(include="object")
-        .apply(lambda col: col.str.startswith("J45", na=False))
-        .any(axis=1),
-    )
-)[0]
-
-# Extract index of individuals who have asthma-related diagnoses (to be excluded)
-asthma_like_idx = np.where(
-    np.logical_or(
-        df_disease[general_illness_cols].isin(range(1111, 1126)).any(axis=1),
-        df_disease[icd10_cols]
-        .select_dtypes(include="object")
-        .apply(lambda col: col.str.startswith("J", na=False))
-        .any(axis=1),
-    )
-)[0]
-
-asthma_df = df_disease[["FID", "IID"]].copy()
-asthma_df["phenotype"] = 0
-asthma_df.iloc[asthma_like_idx, -1] = -9
-asthma_df.iloc[asthma_idx, -1] = 1
-
-asthma_df = asthma_df.loc[asthma_df["phenotype"] != -9]
-asthma_df.to_csv(
-    "data/phenotypes/ukbb/ASTHMA.txt", sep="\t", index=False, header=False, na_rep="NA"
-)
-
-# Free up some memory:
-del asthma_df
-del asthma_idx
-del asthma_like_idx
-
-# ------------------ T1D & T2D ------------------
-
-# Extract index of individuals who have general diabetes diagnosis
-diabetes_like_idx = np.where(
-    np.logical_or(
-        df_disease[general_illness_cols].isin(range(1220, 1224)).any(axis=1),
-        df_disease[icd10_cols]
-        .select_dtypes(include="object")
-        .apply(
-            lambda col: col.str.startswith(
-                ("E10", "E11", "E12", "E13", "E14"), na=False
-            )
-        )
-        .any(axis=1),
-    )
-)[0]
-
-# Extract index of individuals who have T1D diagnosis
-t1d_idx = np.where(
-    np.logical_or(
-        (df_disease[general_illness_cols] == 1222).any(axis=1),
-        df_disease[icd10_cols]
-        .select_dtypes(include="object")
-        .apply(lambda col: col.str.startswith("E10", na=False))
-        .any(axis=1),
-    )
-)[0]
-
-# Extract index of individuals who have T2D diagnosis
-t2d_idx = np.where(
-    np.logical_or(
-        (df_disease[general_illness_cols] == 1223).any(axis=1),
-        df_disease[icd10_cols]
-        .select_dtypes(include="object")
-        .apply(lambda col: col.str.startswith("E11", na=False))
-        .any(axis=1),
-    )
-)[0]
-
-# Delete `df_disease` to free up memory:
-
-sample_ids = df_disease[["FID", "IID"]].copy()
-del df_disease
-
-
-# T1D:
-t1d_df = sample_ids.copy()
-t1d_df["phenotype"] = 0
-t1d_df.iloc[diabetes_like_idx, -1] = -9
-t1d_df.iloc[t1d_idx, -1] = 1
-t1d_df.iloc[t2d_idx, -1] = -9
-
-t1d_df = t1d_df.loc[t1d_df["phenotype"] != -9]
-# t1d_df.to_csv("data/phenotypes/ukbb/T1D.txt",
-# sep="\t", index=False, header=False, na_rep='NA')
-
-# T2D:
-t2d_df = sample_ids
-t2d_df["phenotype"] = 0
-t2d_df.iloc[diabetes_like_idx, -1] = -9
-t2d_df.iloc[t2d_idx, -1] = 1
-t2d_df.iloc[t1d_idx, -1] = -9
-
-t2d_df = t2d_df.loc[t2d_df["phenotype"] != -9]
-t2d_df.to_csv(
-    "data/phenotypes/ukbb/T2D.txt", sep="\t", index=False, header=False, na_rep="NA"
 )

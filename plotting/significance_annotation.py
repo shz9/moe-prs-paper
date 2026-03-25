@@ -1,5 +1,6 @@
 import math
 
+import matplotlib.pyplot as plt
 import numpy as np
 
 
@@ -17,13 +18,25 @@ def _annotate_significance_panel(
     dodge_width=0.8,
     alpha=0.05,
     vertical_pad_frac=0.02,
-    horiz_spacing_frac=0.6,
     encode_strength=True,
+    annotation_mode="bracket",  # "bracket" or "second_model"
+    bracket_tick_frac=0.015,
+    bracket_line_frac=0.01,
+    group_stack_frac=0.06,  # vertical stacking between multiple comparisons in same x group
 ):
     """
     Annotate a single panel (single Axes) with significance markers.
-    panel_df must already be subsetted for this facet.
+
+    annotation_mode:
+        - "bracket": draw a bracket between the two bars and place the symbol centered above it
+        - "second_model": place the symbol above the second model's bar
+
+    This version keeps the bar geometry fixed from hue_order and only uses panel_df
+    to decide whether a given bar exists. Missing bars do not change positions.
     """
+
+    if annotation_mode not in {"bracket", "second_model"}:
+        raise ValueError("annotation_mode must be either 'bracket' or 'second_model'")
 
     # ---------- Statistical helper ----------
     def p_from_z(z):
@@ -50,9 +63,8 @@ def _annotate_significance_panel(
 
     # ---------- X positions ----------
     x_to_index = {lab: i for i, lab in enumerate(x_labels)}
-    x_base_positions = np.arange(len(x_labels))
 
-    # ---------- Dodge math (EXACTLY like your errorbar function) ----------
+    # ---------- Fixed dodge geometry from full hue_order ----------
     if hue and hue_order:
         num_hues = len(hue_order)
         bar_width = dodge_width / num_hues
@@ -66,43 +78,52 @@ def _annotate_significance_panel(
         bar_width = dodge_width
         dodge_distances = np.array([0.0])
 
-    # ---------- Build lookup: (x_label, hue) -> position, mean, stderr ----------
+    # ---------- Build lookup: full geometry, missing bars just become None ----------
     lookup = {}
 
     for x_lab in x_labels:
         if x_lab not in x_to_index:
             continue
+
         base_x = x_to_index[x_lab]
 
-        for i_h, hue_val in enumerate(hue_order if hue_order else [None]):
-            x_pos = base_x + dodge_distances[i_h]
-
-            if hue:
+        if hue and hue_order:
+            for i_h, hue_val in enumerate(hue_order):
                 row = panel_df[(panel_df[x] == x_lab) & (panel_df[hue] == hue_val)]
-            else:
-                row = panel_df[(panel_df[x] == x_lab)]
 
+                if row.empty:
+                    lookup[(x_lab, hue_val)] = None
+                else:
+                    lookup[(x_lab, hue_val)] = {
+                        "x": float(base_x + dodge_distances[i_h]),
+                        "mean": float(row[y].iloc[0]),
+                        "stderr": float(row[yerr].iloc[0]),
+                    }
+        else:
+            row = panel_df[panel_df[x] == x_lab]
             if row.empty:
-                lookup[(x_lab, hue_val)] = None
+                lookup[(x_lab, None)] = None
             else:
-                lookup[(x_lab, hue_val)] = {
-                    "x": x_pos,
+                lookup[(x_lab, None)] = {
+                    "x": float(base_x),
                     "mean": float(row[y].iloc[0]),
                     "stderr": float(row[yerr].iloc[0]),
                 }
 
-    # ---------- Loop over x groups, collect all annotations first ----------
-    all_annotations = []  # list of (x_draw, base_y, symbol)
+    # ---------- Collect annotations grouped by x category ----------
+    group_annotations = {x_lab: [] for x_lab in x_labels}
 
     for x_lab in x_labels:
-        significant_items = []
-
         for (m1, m2), base_symbol in zip(test_pairs, symbols):
-            if m1 not in hue_order or m2 not in hue_order:
-                continue
+            if hue and hue_order:
+                if m1 not in hue_order or m2 not in hue_order:
+                    continue
 
-            entry1 = lookup.get((x_lab, m1))
-            entry2 = lookup.get((x_lab, m2))
+                entry1 = lookup.get((x_lab, m1))
+                entry2 = lookup.get((x_lab, m2))
+            else:
+                entry1 = lookup.get((x_lab, None))
+                entry2 = lookup.get((x_lab, None))
 
             if not entry1 or not entry2:
                 continue
@@ -111,54 +132,108 @@ def _annotate_significance_panel(
             m2_mean, m2_se = entry2["mean"], entry2["stderr"]
 
             sig, p = is_significant(m1_mean, m1_se, m2_mean, m2_se)
-
             if not sig:
                 continue
 
             symbol = symbol_from_p(p, base_symbol)
-            pair_center = 0.5 * (entry1["x"] + entry2["x"])
-            base_y = max(m1_mean + m1_se, m2_mean + m2_se)
-            significant_items.append((pair_center, base_y, symbol))
 
-        if not significant_items:
-            continue
+            if annotation_mode == "second_model":
+                x_anchor = entry2["x"]
+                base_y = entry2["mean"] + entry2["stderr"]
+                group_annotations[x_lab].append(
+                    ("second_model", x_anchor, base_y, symbol)
+                )
+            else:
+                x_left = entry1["x"]
+                x_right = entry2["x"]
+                if x_left > x_right:
+                    x_left, x_right = x_right, x_left
 
-        # Horizontal stacking within an x group
-        n = len(significant_items)
-        spacing = horiz_spacing_frac * bar_width
-        offsets = np.linspace(-(n - 1) / 2 * spacing, (n - 1) / 2 * spacing, n)
+                x_mid = 0.5 * (x_left + x_right)
+                base_y = max(m1_mean + m1_se, m2_mean + m2_se)
+                group_annotations[x_lab].append(
+                    ("bracket", x_left, x_right, x_mid, base_y, symbol)
+                )
 
-        for (pair_center, base_y, symbol), dx in zip(significant_items, offsets):
-            all_annotations.append((pair_center + dx, base_y, symbol))
-
-    if not all_annotations:
+    if not any(group_annotations.values()):
         return
 
-    # ---------- Draw annotations, updating y-limits incrementally ----------
-    # Re-read current limits each time so expanding the axis is reflected
-    # in the padding calculation for subsequent symbols.
-    for x_draw, base_y, symbol in all_annotations:
+    # ---------- Draw annotations ----------
+    for x_lab in x_labels:
+        items = group_annotations.get(x_lab, [])
+        if not items:
+            continue
+
         y_min, y_max = ax.get_ylim()
         y_range = y_max - y_min if y_max > y_min else 1.0
+
         vpad = vertical_pad_frac * y_range
+        stack_step = group_stack_frac * y_range if len(items) > 1 else 0.0
+        tick_h = bracket_tick_frac * y_range
+        line_gap = bracket_line_frac * y_range
 
-        y_draw = base_y + vpad
+        for i, item in enumerate(items):
+            extra_y = i * stack_step
 
-        ax.text(
-            x_draw,
-            y_draw,
-            symbol,
-            ha="center",
-            va="bottom",
-            color="grey",
-            fontweight="bold",
-        )
+            if item[0] == "second_model":
+                _, x_anchor, base_y, symbol = item
+                y_text = base_y + vpad + extra_y
 
-        # Expand axis to accommodate the new annotation
-        text_height_estimate = 0.04 * y_range  # rough estimate for font height
-        needed_ymax = y_draw + text_height_estimate
-        if needed_ymax > y_max:
-            ax.set_ylim(y_min, needed_ymax)
+                ax.text(
+                    x_anchor,
+                    y_text,
+                    symbol,
+                    ha="center",
+                    va="bottom",
+                    color="grey",
+                    fontweight="bold",
+                )
+
+                text_height_estimate = 0.04 * y_range
+                needed_ymax = y_text + text_height_estimate
+                if needed_ymax > y_max:
+                    y_max = needed_ymax
+
+            else:
+                _, x_left, x_right, x_mid, base_y, symbol = item
+                y_bracket = base_y + vpad + extra_y
+
+                ax.plot(
+                    [x_left, x_left],
+                    [y_bracket, y_bracket + tick_h],
+                    color="grey",
+                    lw=1,
+                )
+                ax.plot(
+                    [x_right, x_right],
+                    [y_bracket, y_bracket + tick_h],
+                    color="grey",
+                    lw=1,
+                )
+                ax.plot(
+                    [x_left, x_right],
+                    [y_bracket + tick_h, y_bracket + tick_h],
+                    color="grey",
+                    lw=1,
+                )
+
+                y_text = y_bracket + tick_h + line_gap
+                ax.text(
+                    x_mid,
+                    y_text,
+                    symbol,
+                    ha="center",
+                    va="bottom",
+                    color="grey",
+                    fontweight="bold",
+                )
+
+                text_height_estimate = 0.04 * y_range
+                needed_ymax = y_text + text_height_estimate
+                if needed_ymax > y_max:
+                    y_max = needed_ymax
+
+        ax.set_ylim(y_min, y_max)
 
 
 def add_significance_annotations(
@@ -174,6 +249,7 @@ def add_significance_annotations(
     symbols=None,
     dodge_width=0.8,
     alpha=0.05,
+    annotation_mode="bracket",  # "bracket" or "second_model"
 ):
     """
     Works for single Axes or seaborn FacetGrid.
@@ -181,8 +257,6 @@ def add_significance_annotations(
 
     if symbols is None:
         symbols = ["*"] * len(test_pairs)
-
-    import matplotlib.pyplot as plt
 
     # ---------- Single axis ----------
     if isinstance(plot_obj, plt.Axes):
@@ -199,12 +273,12 @@ def add_significance_annotations(
             symbols,
             dodge_width=dodge_width,
             alpha=alpha,
+            annotation_mode=annotation_mode,
         )
         return
 
     # ---------- FacetGrid ----------
     if hasattr(plot_obj, "axes_dict"):
-        # seaborn stores these as _col_var / _row_var, not col_var / row_var
         row_var = getattr(plot_obj, "_row_var", None) or getattr(
             plot_obj, "row_var", None
         )
@@ -215,7 +289,6 @@ def add_significance_annotations(
         for key, ax in plot_obj.axes_dict.items():
             panel_df = data.copy()
 
-            # Determine facet values and filter to this panel only
             if isinstance(key, tuple):
                 if row_var and col_var:
                     row_val, col_val = key
@@ -227,7 +300,6 @@ def add_significance_annotations(
                 elif row_var:
                     panel_df = panel_df[panel_df[row_var] == key[0]]
             else:
-                # key is a scalar (single facet variable)
                 if col_var:
                     panel_df = panel_df[panel_df[col_var] == key]
                 elif row_var:
@@ -249,4 +321,5 @@ def add_significance_annotations(
                 symbols,
                 dodge_width=dodge_width,
                 alpha=alpha,
+                annotation_mode=annotation_mode,
             )

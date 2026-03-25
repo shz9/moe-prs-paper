@@ -11,7 +11,7 @@ for gb in genome_builds:
 
     # Loop over all the scoring files and extract the SNP positions from them:
     # We want a union of all the SNP positions:
-    pgs_files = glob.glob(f"data/pgs_weights/*/{gb}/*.txt.gz")
+    pgs_files = glob.glob(f"data/pgs_weights/{gb}/*.txt.gz")
     for f in tqdm(pgs_files, total=len(pgs_files), desc=f"Reading {gb} PGS files"):
         df = pd.read_csv(f, sep="\t", comment="#", compression="gzip")
 

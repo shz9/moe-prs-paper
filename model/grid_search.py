@@ -6,14 +6,119 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+from clustering import cluster_covariates
 from joblib import Parallel, delayed
-from sklearn.model_selection import ParameterGrid
+from sklearn.model_selection import (
+    KFold,
+    ParameterGrid,
+    StratifiedKFold,
+    StratifiedShuffleSplit,
+    train_test_split,
+)
 
 parent_dir = osp.dirname(osp.dirname(osp.abspath(__file__)))
 sys.path.append(parent_dir)
 sys.path.append(osp.join(parent_dir, "evaluation/"))
 
 from evaluate_predictive_performance import stratified_evaluation
+
+
+def _stratified_sample_and_split(
+    dataset: Any,
+    n_splits: int,
+    max_size: int = None,
+    rng=np.random,
+    cluster_fn=None,
+    return_cluster_labels=False,
+) -> List[np.ndarray]:
+    """
+    Use sklearn to (1) sample `max_size` indices with stratification (preserving cluster_fn labels),
+    then (2) split those sampled indices into `n_splits` stratified folds.
+
+    Returns:
+        folds: list of length n_splits, each an np.ndarray of indices (relative to original dataset)
+    Behavior / fallbacks:
+      - If some classes are too rare for StratifiedKFold (class_count < n_splits),
+        fall back to a robust proportional sampling / splitting implementation that ensures
+        small labels are represented as best as possible.
+    """
+
+    N = int(getattr(dataset, "N", None))
+    if N is None:
+        raise ValueError(
+            "dataset must have attribute 'N' indicating total sample size."
+        )
+
+    max_size = max_size or N
+
+    # --------------------------------------------------------
+    cluster_labels = None
+    # Get labels; call cluster_fn on a deepcopy if it might mutate dataset
+    if cluster_fn is not None:
+        cluster_labels = cluster_fn(dataset)
+
+    if dataset.phenotype_likelihood == "binomial":
+        if cluster_labels is None:
+            cluster_labels = dataset.get_phenotype().flatten()
+        else:
+            cluster_labels = (
+                pd.Series(cluster_labels).astype(str)
+                + pd.Series(dataset.get_phenotype().flatten()).astype(str)
+            ).values
+
+    # --------------------------------------------------------
+    # If requested max_size >= N, just use all indices and perform StratifiedKFold on entire dataset (if possible)
+    all_indices = np.arange(N)
+    if max_size >= N:
+        sampled_indices = all_indices
+    else:
+        # Use StratifiedShuffleSplit to sample `total_used` indices with preserved label proportions
+        train_size = float(max_size) / N  # StratifiedShuffleSplit uses train_size param
+
+        if cluster_labels is not None:
+            sss = StratifiedShuffleSplit(
+                n_splits=1,
+                train_size=train_size,
+                random_state=rng,
+            )
+            # sss.split yields train_idx, test_idx relative to 0..N-1; we treat train_idx as the sampled set
+            train_idx, _ = next(sss.split(all_indices, cluster_labels))
+            sampled_indices = all_indices[train_idx]
+        else:
+            train_idx, _ = train_test_split(all_indices, test_size=1.0 - train_size)
+            sampled_indices = all_indices[train_idx]
+
+    # --------------------------------------------------------
+    # Now sampled_indices is our subset; get labels for sampled set
+    if cluster_labels is not None:
+        sampled_labels = cluster_labels[sampled_indices]
+
+        skf = StratifiedKFold(
+            n_splits=n_splits,
+            shuffle=True,
+            random_state=rng,
+        )
+
+        ss = skf.split(np.zeros(len(sampled_indices)), sampled_labels)
+
+    else:
+        kf = KFold(
+            n_splits=n_splits,
+            shuffle=True,
+            random_state=rng,
+        )
+        ss = kf.split(np.zeros(len(sampled_indices)))
+
+    # --------------------------------------------------------
+    folds = []
+    for _, test_pos in ss:
+        fold_indices = sampled_indices[test_pos]
+        folds.append(np.asarray(fold_indices, dtype=int))
+
+    if return_cluster_labels:
+        return folds, cluster_labels
+    else:
+        return folds
 
 
 def get_gate_penalty_ladder(n_steps=8):
@@ -168,8 +273,9 @@ def custom_cv_grid_search(
     baseline_model: Any,
     param_grid: Dict[str, List[Any]],
     n_splits: int = 2,
-    max_validation_size: Optional[int] = 5_000,
+    max_validation_size: Optional[int] = 10_000,
     evaluation_metric: str = "Incremental_R2",
+    rescale_penalty=True,
     random_state: Optional[int] = None,
     minimize_metric: bool = False,
     n_jobs: int = 1,
@@ -226,24 +332,25 @@ def custom_cv_grid_search(
 
     # Determine per-fold size
     if max_validation_size is None:
-        per_fold_size = N // n_splits
+        per_fold_target = N // n_splits
     else:
-        per_fold_size = min(max_validation_size, N // n_splits)
+        per_fold_target = min(max_validation_size, N // n_splits)
 
-    if per_fold_size <= 0:
+    if per_fold_target <= 0:
         raise ValueError(
             "Computed per-fold size <= 0. Check N, n_splits and max_validation_size."
         )
 
-    total_used = per_fold_size * n_splits
-    all_indices = np.arange(N)
-    sampled_indices = rng.permutation(all_indices)[:total_used]
+    total_used = per_fold_target * n_splits
 
-    # create folds (same for all combos)
-    folds = [
-        sampled_indices[i * per_fold_size : (i + 1) * per_fold_size]
-        for i in range(n_splits)
-    ]
+    # create stratified folds using sklearn utilities
+    folds = _stratified_sample_and_split(
+        dataset,
+        n_splits=n_splits,
+        max_size=total_used,
+        rng=rng,
+        cluster_fn=cluster_covariates,
+    )
 
     # build parameter grid
     grid = list(ParameterGrid(param_grid))
@@ -294,9 +401,18 @@ def custom_cv_grid_search(
     else:
         best_idx = results_df["mean_metric"].idxmax()
 
-    best_params = results_df.loc[best_idx, "params"]
+    best_params = results_df.loc[best_idx, "params"].copy()
 
     print("> Best set of hyperparameters:", best_params)
+
+    if rescale_penalty:
+        for p in best_params:
+            if "penalty" in p:
+                best_params[p] *= float(per_fold_target) / N
+
+        print(
+            "> Rescaled best hyperparameters (accounting for subsampling):", best_params
+        )
 
     # instantiate final model on deepcopy of dataset (safe) and train on full dataset
     final_dataset = dataset

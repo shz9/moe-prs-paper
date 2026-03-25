@@ -531,10 +531,9 @@ class AncestryWeightedPRS(object):
         """
         Predict. If prs_dataset provided, extract data with stored scaler.
         Samples failing the represented-ancestry threshold receive NaN.
-        For binary outcomes:
-          - if using logistic and not requesting logits, returns probabilities (expit of combined logits)
-          - if internal models return probabilities and weighing_scheme == "after",
-          we combine probabilities linearly by weights (consistent with previous behavior).
+        For binary outcomes, returns probabilities.
+        For the "after" scheme, combines ancestry-specific probabilities
+        as a normalised linear mixture: P(y=1) = sum_j w_j P(y=1 | ancestry=j).
         """
         if prs_dataset is None:
             input_data = self.input_data
@@ -547,10 +546,12 @@ class AncestryWeightedPRS(object):
             else:
                 pred = self.reg_model.predict_proba(input_data["data"])[:, 1]
             pred[~input_data["keep_samples"]] = np.nan
-            return pred
         else:
-            pred = None
-            keep_samples = None
+            N = next(iter(input_data.values()))["data"].shape[0]
+            pred = np.zeros(N)
+            weight_sum = np.zeros(N)
+            keep_samples = np.zeros(N, dtype=bool)
+
             for anc, dat in input_data.items():
                 model = self.reg_model.get(anc)
                 if model is None:
@@ -560,17 +561,14 @@ class AncestryWeightedPRS(object):
                     pred_anc = model.predict(X).flatten()
                 else:
                     pred_anc = model.predict_proba(X)[:, 1]
-                if pred is None:
-                    pred = pred_anc * dat["weights"]
-                    keep_samples = dat["keep_samples"].copy()
-                else:
-                    pred += pred_anc * dat["weights"]
-                    keep_samples = keep_samples | dat["keep_samples"]
+                pred += pred_anc * dat["weights"]
+                weight_sum += dat["weights"] * dat["keep_samples"]
+                keep_samples |= dat["keep_samples"]
 
-            if pred is None:
-                return None
+            pred[keep_samples] /= weight_sum[keep_samples]
             pred[~keep_samples] = np.nan
-            return pred
+
+        return pred
 
     def predict_prs(self, prs_dataset=None, logit_scale=False):
         """
@@ -579,6 +577,11 @@ class AncestryWeightedPRS(object):
         Uses the same data extraction pipeline as predict(), but applies only
         the PRS coefficient from each fitted model, ignoring covariate
         contributions.
+
+        For the "after" scheme with binary outcomes, combines
+        ancestry-specific probabilities as a normalised linear mixture,
+        consistent with predict(). The logit_scale flag is only meaningful
+        for the "before" scheme or Gaussian outcomes.
         """
         if prs_dataset is None:
             input_data = self.input_data
@@ -588,9 +591,13 @@ class AncestryWeightedPRS(object):
         if self.weighing_scheme == "before":
             prs_col = input_data["data"][:, -1]
             coef = np.asarray(self.reg_model.coef_).ravel()
-            intercept = float(np.asarray(self.reg_model.intercept_).ravel()[0])
-            pred = intercept + prs_col * coef[-1]
+            # intercept = float(np.asarray(self.reg_model.intercept_).ravel()[0])
+            # pred = intercept + prs_col * coef[-1]
+            # ignoring intercept for now:
+            pred = prs_col * coef[-1]
             pred[~input_data["keep_samples"]] = np.nan
+            if self.family != "gaussian" and not logit_scale:
+                pred = expit(pred)
         else:
             N = next(iter(input_data.values()))["data"].shape[0]
             pred = np.zeros(N)
@@ -603,16 +610,27 @@ class AncestryWeightedPRS(object):
                     continue
                 prs_col = dat["data"][:, -1]
                 coef = np.asarray(mdl.coef_).ravel()
-                intercept = float(np.asarray(mdl.intercept_).ravel()[0])
-                pred += (intercept + prs_col * coef[-1]) * dat["weights"]
+                # intercept = float(np.asarray(mdl.intercept_).ravel()[0])
+                # lin = intercept + prs_col * coef[-1]
+                # IGNORING INTERCEPT FOR NOW:
+                lin = prs_col * coef[-1]
+                # Convert to probability space before mixing, consistent with predict()
+                pred_anc = lin if self.family == "gaussian" else expit(lin)
+                pred += pred_anc * dat["weights"]
                 weight_sum += dat["weights"] * dat["keep_samples"]
                 keep_samples |= dat["keep_samples"]
 
             pred[keep_samples] /= weight_sum[keep_samples]
             pred[~keep_samples] = np.nan
 
-        if self.family != "gaussian" and not logit_scale:
-            pred = expit(pred)
+            # For binary outcomes, pred is already in probability space.
+            # logit_scale is not meaningful here since we mixed in probability
+            # space — converting back would not recover a proper logit.
+            if self.family != "gaussian" and logit_scale:
+                raise ValueError(
+                    "logit_scale=True is not supported for the 'after' scheme with "
+                    "binary outcomes, as predictions are combined in probability space."
+                )
 
         return pred.flatten()
 

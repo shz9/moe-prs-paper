@@ -472,7 +472,7 @@ def generate_weight_figures(weights_df, biobank="ukbb"):
     plt.close()
 
 
-def extract_weights_data(biobank="ukbb"):
+def extract_weights_data(moe_model_name, biobank="ukbb"):
     w_dfs = []
 
     for pheno in phenotypes:
@@ -482,7 +482,7 @@ def extract_weights_data(biobank="ukbb"):
                 f"data/harmonized_data/{pheno}/{biobank}/test_data.pkl"
             )
             moe_model = MoEPRS.from_saved_model(
-                f"data/trained_models/{pheno}/{biobank}/train_data/{args.moe_model}.pkl"
+                f"data/trained_models/{pheno}/{biobank}/train_data/{moe_model_name}.pkl"
             )
         except Exception as e:
             print(e)
@@ -506,6 +506,7 @@ def extract_weights_data(biobank="ukbb"):
 
 
 def extract_accuracy_data(
+    moe_model_name,
     test_biobank="ukbb",
     metric="Incremental_R2",
     dataset="test_data",
@@ -527,8 +528,8 @@ def extract_accuracy_data(
             (df["Model Category"] != "MoE")
             | df["Model Name"].isin(
                 [
-                    f"{args.moe_model} (ukbb)",
-                    f"{args.moe_model} (cartagene)",
+                    f"{moe_model_name} (ukbb)",
+                    f"{moe_model_name} (cartagene)",
                 ]
             )
         ]
@@ -541,10 +542,10 @@ def extract_accuracy_data(
 
         # Rename the models for clarity:
         df["Model Name"] = df["Model Name"].str.replace(
-            f"{args.moe_model} (ukbb)", "MoEPRS (UKB)", regex=False
+            f"{moe_model_name} (ukbb)", "MoEPRS (UKB)", regex=False
         )
         df["Model Name"] = df["Model Name"].str.replace(
-            f"{args.moe_model} (cartagene)", "MoEPRS (CaG)", regex=False
+            f"{moe_model_name} (cartagene)", "MoEPRS (CaG)", regex=False
         )
         df["Model Name"] = df["Model Name"].str.replace(
             "MultiPRS (ukbb)", "MultiPRS (UKB)", regex=False
@@ -573,7 +574,11 @@ def extract_accuracy_data(
 
 
 def extract_moe_model_hdl_data(
-    biobank, dataset="test_data", keep_ancestry=None, exclude_ancestry=None
+    moe_model_name,
+    biobank,
+    dataset="test_data",
+    keep_ancestry=None,
+    exclude_ancestry=None,
 ):
     if isinstance(keep_ancestry, str):
         keep_ancestry = [keep_ancestry]
@@ -583,7 +588,7 @@ def extract_moe_model_hdl_data(
 
     dat = PRSDataset.from_pickle(f"data/harmonized_data/HDL/{biobank}/{dataset}.pkl")
     model = MoEPRS.from_saved_model(
-        f"data/trained_models/HDL/{biobank}/train_data/MoE-global-int.pkl"
+        f"data/trained_models/HDL/{biobank}/train_data/{moe_model_name}.pkl"
     )
 
     if keep_ancestry is not None:
@@ -646,7 +651,9 @@ def plot_hdl_variance_and_performance_characteristics(biobank="ukbb"):
     ax1.grid(True, axis="y")
     ax1.set_ylabel("HDL Variance")
 
-    sq_error_plot_data = extract_moe_model_hdl_data(biobank, keep_ancestry=["EUR"])
+    sq_error_plot_data = extract_moe_model_hdl_data(
+        args.moe_model, biobank, keep_ancestry=["EUR"]
+    )
 
     sns.barplot(
         data=sq_error_plot_data,
@@ -799,7 +806,15 @@ if __name__ == "__main__":
         "--moe-model",
         dest="moe_model",
         type=str,
-        default="MoE-global-int",
+        default="MoE-GS",
+        help="The name of the MoE model to plot as reference.",
+    )
+
+    parser.add_argument(
+        "--fixed-rsid-moe-model",
+        dest="fr_moe_model",
+        type=str,
+        default="MoE-fixed-resid",
         help="The name of the MoE model to plot as reference.",
     )
 
@@ -817,7 +832,7 @@ if __name__ == "__main__":
     }
 
     # ---------------- Plot accuracy subpanels ----------------
-    ukb_data = extract_accuracy_data("ukbb")
+    ukb_data = extract_accuracy_data(args.moe_model, "ukbb")
 
     g = plot_combined_accuracy_metrics(
         ukb_data,
@@ -878,7 +893,9 @@ if __name__ == "__main__":
 
     # ----------------
     # Plot the same results, but using coarse ancestry labels:
-    ukb_data = extract_accuracy_data("ukbb", evaluation_category="Coarse Ancestry")
+    ukb_data = extract_accuracy_data(
+        args.moe_model, "ukbb", evaluation_category="Coarse Ancestry"
+    )
 
     g = plot_combined_accuracy_metrics(
         ukb_data,
@@ -914,7 +931,7 @@ if __name__ == "__main__":
     # ----------------------------------------------------------------
     # Plot cartagene data:
 
-    cag_data = extract_accuracy_data("cartagene")
+    cag_data = extract_accuracy_data(args.moe_model, "cartagene")
 
     g = plot_combined_accuracy_metrics(
         cag_data,
@@ -949,7 +966,9 @@ if __name__ == "__main__":
 
     # ----------------
     # Plot the same data using coarse ancestry labels:
-    cag_data = extract_accuracy_data("cartagene", evaluation_category="Coarse Ancestry")
+    cag_data = extract_accuracy_data(
+        args.moe_model, "cartagene", evaluation_category="Coarse Ancestry"
+    )
 
     g = plot_combined_accuracy_metrics(
         cag_data,
@@ -1015,9 +1034,7 @@ if __name__ == "__main__":
     # =================================================================
     # Plot accuracy / admixture graph for HDL for the model with fixed variance:
 
-    args.moe_model = "MoE-fixed-resid-global-int"
-
-    ukb_data = extract_accuracy_data("ukbb")
+    ukb_data = extract_accuracy_data(args.fr_moe_model, "ukbb")
 
     g = plot_combined_accuracy_metrics(
         ukb_data,
@@ -1050,7 +1067,7 @@ if __name__ == "__main__":
         test_models=("MoEPRS (UKB)", "MultiPRS (UKB)"),
     )
 
-    cag_data = extract_accuracy_data("cartagene")
+    cag_data = extract_accuracy_data(args.fr_moe_model, "cartagene")
 
     g = plot_combined_accuracy_metrics(
         cag_data,
@@ -1093,7 +1110,7 @@ if __name__ == "__main__":
                 f"data/harmonized_data/{pheno}/{biobank}/test_data.pkl"
             )
             moe_fixed_var = MoEPRS.from_saved_model(
-                f"data/trained_models/{pheno}/{biobank}/train_data/MoE-fixed-resid-global-int.pkl"
+                f"data/trained_models/{pheno}/{biobank}/train_data/{args.fr_moe_model}.pkl"
             )
 
             biobank_name = BIOBANK_NAME_MAP_SHORT[biobank]
@@ -1110,15 +1127,13 @@ if __name__ == "__main__":
                 figsize=(g.fig.get_size_inches()[0], 3.1),
             )
 
-    args.moe_model = "MoE-global-int"
-
     # ---------------- Plot expert weights for the phenotypes ----------------
     sns.set_context("paper", font_scale=1.25)
 
-    ukbb_weights = extract_weights_data(biobank="ukbb")
+    ukbb_weights = extract_weights_data(args.moe_model, biobank="ukbb")
     generate_weight_figures(ukbb_weights, biobank="ukbb")
 
-    cag_weights = extract_weights_data(biobank="cartagene")
+    cag_weights = extract_weights_data(args.moe_model, biobank="cartagene")
     generate_weight_figures(cag_weights, biobank="cartagene")
 
     generate_metrics_figures(biobank="ukbb")

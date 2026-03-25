@@ -124,7 +124,7 @@ if __name__ == "__main__":
         "--moe-model",
         dest="moe_model",
         type=str,
-        default="MoE-global-int",
+        default="MoE-GS",
         help="The name of the MoE model to plot as reference.",
     )
     parser.add_argument(
@@ -165,7 +165,7 @@ if __name__ == "__main__":
     }
 
     # Create output directory:
-    makedir(f"figures/stratified_prediction_accuracy/")
+    makedir("figures/stratified_prediction_accuracy/")
 
     for biobank, ancestries in biobank_group_dict.items():
         for anc in ancestries:

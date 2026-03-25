@@ -22,7 +22,7 @@ if __name__ == "__main__":
         "--moe-model",
         dest="moe_model",
         type=str,
-        default="MoE-global-int",
+        default="MoE-GS",
         help="The name of the MoE model to plot as reference.",
     )
 
