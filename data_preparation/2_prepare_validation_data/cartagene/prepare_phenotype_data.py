@@ -4,7 +4,6 @@ import sys
 import numpy as np
 import pandas as pd
 from magenpy.utils.system_utils import makedir
-from scipy.stats import zscore
 
 sys.path.append(osp.dirname(osp.dirname(__file__)))
 from utils import (
@@ -115,7 +114,6 @@ sh["phenotype"] = np.where(
 )
 print("Standing height")
 print(sh["phenotype"].describe())
-print(pd.Series(zscore(sh["phenotype"], nan_policy="omit")).describe())
 sh.to_csv(
     "data/phenotypes/cartagene/HEIGHT.txt",
     sep="\t",
@@ -141,7 +139,6 @@ bmi["phenotype"] = np.where(
 )
 print("Body Mass Index")
 print(bmi["phenotype"].describe())
-print(pd.Series(zscore(bmi["phenotype"], nan_policy="omit")).describe())
 bmi.to_csv(
     "data/phenotypes/cartagene/LOG_BMI.txt",
     sep="\t",
@@ -216,7 +213,6 @@ dbp["phenotype"] = np.where(
 )
 print("Diastolic blood pressure")
 print(dbp["phenotype"].describe())
-print(pd.Series(zscore(dbp["phenotype"], nan_policy="omit")).describe())
 dbp.to_csv(
     "data/phenotypes/cartagene/DBP.txt",
     sep="\t",
@@ -250,7 +246,6 @@ sbp["phenotype"] = np.where(
 )
 print("Systolic blood pressure")
 print(sbp["phenotype"].describe())
-print(pd.Series(zscore(sbp["phenotype"], nan_policy="omit")).describe())
 sbp.to_csv(
     "data/phenotypes/cartagene/SBP.txt",
     sep="\t",
@@ -285,7 +280,6 @@ whr["phenotype"] = np.where(
 )
 print("Waist-to-hip ratio")
 print(whr["phenotype"].describe())
-print(pd.Series(zscore(whr["phenotype"], nan_policy="omit")).describe())
 whr.to_csv(
     "data/phenotypes/cartagene/WHR.txt",
     sep="\t",
@@ -387,14 +381,14 @@ cad[["CAD1", "CAD2", "CAD3", "CAD4"]] = cad[["CAD1", "CAD2", "CAD3", "CAD4"]].re
 )
 cad["CAD"] = (
     cad[["CAD1", "CAD2", "CAD3", "CAD4"]]
+    .fillna(0.0)
     .sum(axis=1)
     .clip(lower=0.0, upper=1.0)
-    .describe()
 )
 cad.drop(columns=["CAD1", "CAD2", "CAD3", "CAD4"], inplace=True)
 cad.columns = ["FID", "IID", "phenotype"]
 print("CAD")
-print(cad["CAD"].describe())
+print(cad["phenotype"].describe())
 cad.to_csv(
     "data/phenotypes/cartagene/CAD.txt",
     sep="\t",
@@ -439,7 +433,6 @@ ldl["phenotype"] = np.where(
 )
 print("LDL")
 print(ldl["phenotype"].describe())
-print(pd.Series(zscore(ldl["phenotype"], nan_policy="omit")).describe())
 ldl.to_csv(
     "data/phenotypes/cartagene/LDL.txt",
     sep="\t",
@@ -472,7 +465,6 @@ hdl["phenotype"] = np.where(
 )
 print("LOG_HDL")
 print(hdl["phenotype"].describe())
-print(pd.Series(zscore(hdl["phenotype"], nan_policy="omit")).describe())
 hdl.to_csv(
     "data/phenotypes/cartagene/LOG_HDL.txt",
     sep="\t",
@@ -494,7 +486,6 @@ total_chol["phenotype"] = np.where(
 )
 print("Total Cholesterol")
 print(total_chol["phenotype"].describe())
-print(pd.Series(zscore(total_chol["phenotype"], nan_policy="omit")).describe())
 total_chol.to_csv(
     "data/phenotypes/cartagene/TC.txt", sep="\t", index=False, header=False, na_rep="NA"
 )
@@ -523,7 +514,6 @@ log_trig["phenotype"] = np.where(
 )
 print("Log Triglycerides")
 print(log_trig["phenotype"].describe())
-print(pd.Series(zscore(log_trig["phenotype"], nan_policy="omit")).describe())
 log_trig.to_csv(
     "data/phenotypes/cartagene/LOG_TG.txt",
     sep="\t",
@@ -546,7 +536,6 @@ creatinine["phenotype"] = np.where(
 )
 print("Log Creatinine")
 print(creatinine["phenotype"].describe())
-print(pd.Series(zscore(creatinine["phenotype"], nan_policy="omit")).describe())
 creatinine.to_csv(
     "data/phenotypes/cartagene/LOG_CRTN.txt",
     sep="\t",
@@ -568,7 +557,6 @@ urate["phenotype"] = np.where(
 )
 print("Urate")
 print(urate["phenotype"].describe())
-print(pd.Series(zscore(urate["phenotype"], nan_policy="omit")).describe())
 urate.to_csv(
     "data/phenotypes/cartagene/URT.txt",
     sep="\t",

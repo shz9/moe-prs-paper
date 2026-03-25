@@ -12,9 +12,9 @@
 
 source "env/moe/bin/activate"
 
-phenotype=${1:-"HEIGHT"}
+analyis_id=${1:-"HEIGHT_MA"}
 
-for dataset in data/harmonized_data/"$phenotype"/*/train_data.pkl
+for dataset in data/harmonized_data/"$analyis_id"/*/train_data.pkl
 do
-  python3 model/train_models.py --dataset-path "$dataset" --skip-moe-pytorch
+  python3 model/train_models.py --dataset-path "$dataset"
 done

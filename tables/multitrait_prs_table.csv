@@ -1,4 +1,4 @@
-AnalysisID,Phenotype,Phenotype_short,Phecode,PhenotypeID,PGS,PGSCatalog_ID,PGS_trait,Notes
+AnalysisID,Phenotype,Phenotype_short,Phecode,PhenotypeID,PGS,PGSCatalog_ID,PGS_Name,Notes
 T2D_MT,Type 2 Diabetes,T2D,250.2,MONDO_0005148,PGS002026,PGS002026,T2D,Primary disease score
 T2D_MT,Type 2 Diabetes,T2D,250.2,MONDO_0005148,PGS002161,PGS002161,BMI,Major causal risk factor
 T2D_MT,Type 2 Diabetes,T2D,250.2,MONDO_0005148,PGS002171,PGS002171,HbA1c,Glycaemic control

@@ -1,4 +1,4 @@
-AnalysisID,Phenotype,Phenotype_short,PhenotypeID,PGS,PGSCatalog_ID,Training_cohort,Notes
+AnalysisID,Phenotype,Phenotype_short,PhenotypeID,PGS,PGSCatalog_ID,PGS_Name,Notes
 HEIGHT_MA,Standing Height,HEIGHT,"EFO_0004339",PGS002800,PGS002800,CSA,
 HEIGHT_MA,Standing Height,HEIGHT,"EFO_0004339",PGS002801,PGS002801,AFR,
 HEIGHT_MA,Standing Height,HEIGHT,"EFO_0004339",PGS002803,PGS002803,EAS,

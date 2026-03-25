@@ -16,7 +16,7 @@ do
               -s "data/external_sumstats/sex_stratified/${phenotype}/${stratum}.glm.linear" \
               --sumstats-format "plink2" \
               --output-dir "data/pgs_weights/" \
-              --output-file-prefix "${phenotype}_${stratum}"
+              --output-file-prefix "${phenotype}_${stratum}_"
     python3 data_preparation/1_prepare_pgs_weights/utils/harmonize_inferred_beta.py \
             --input-file "data/pgs_weights/${phenotype}_${stratum}_VIPRS_EM.fit.gz" \
             --pgs-name "${phenotype}_${stratum}" \

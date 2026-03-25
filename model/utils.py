@@ -1,17 +1,19 @@
-import os.path as osp
-import os
-import threading
 import copy
+import glob
+import os
+import os.path as osp
 import pickle
+import threading
+import time
+
 import numpy as np
 import pandas as pd
-import torch
-from torch.utils.data import DataLoader
-import time
 import psutil
+import torch
+from moe_pytorch import Lit_MoEPRS
+from torch.utils.data import DataLoader
 from viprs.eval.eval_utils import fit_linear_model
 
-from moe_pytorch import Lit_MoEPRS
 
 class Timer:
     def __enter__(self):
@@ -30,13 +32,19 @@ class Timer:
     def minutes(self):
         return self.elapsed / 60
 
+
 class PeakMemory:
     """
     Samples process RSS (and optionally children RSS) and tracks the peak.
     Optionally tracks CUDA peak allocated memory too (if torch + GPU available).
     """
 
-    def __init__(self, interval: float = 0.2, include_children: bool = True, track_gpu: bool = False):
+    def __init__(
+        self,
+        interval: float = 0.2,
+        include_children: bool = True,
+        track_gpu: bool = False,
+    ):
         self.interval = float(interval)
         self.include_children = bool(include_children)
         self.track_gpu = bool(track_gpu)
@@ -82,6 +90,7 @@ class PeakMemory:
         if self.track_gpu:
             try:
                 import torch
+
                 if torch.cuda.is_available():
                     torch.cuda.reset_peak_memory_stats()
             except Exception:
@@ -101,6 +110,7 @@ class PeakMemory:
         if self.track_gpu:
             try:
                 import torch
+
                 if torch.cuda.is_available():
                     self.peak_cuda_alloc_bytes = int(torch.cuda.max_memory_allocated())
             except Exception:
@@ -110,16 +120,20 @@ class PeakMemory:
 
     @property
     def peak_rss_gb(self) -> float:
-        return self.peak_rss_bytes / (1024 ** 3)
+        return self.peak_rss_bytes / (1024**3)
 
     @property
     def peak_cuda_alloc_gb(self) -> float:
-        return self.peak_cuda_alloc_bytes / (1024 ** 3)
-    
+        return self.peak_cuda_alloc_bytes / (1024**3)
+
+
 def compare_scalers(scaler1, scaler2):
-    return np.allclose(scaler1.mean_, scaler2.mean_) and \
-           np.allclose(scaler1.var_, scaler2.var_) and \
-           np.allclose(scaler1.scale_, scaler2.scale_)
+    return (
+        np.allclose(scaler1.mean_, scaler2.mean_)
+        and np.allclose(scaler1.var_, scaler2.var_)
+        and np.allclose(scaler1.scale_, scaler2.scale_)
+    )
+
 
 def apply_saved_scaler(prs_dataset, scaler_dir, scaler_name="MoE-PyTorch.scaler.pkl"):
     """
@@ -150,9 +164,7 @@ def incremental_r2_matched_null(true_val, full_pred, null_pred, covariates):
 
     # Null (matched) evaluation regression: y ~ C + null_pred
     null_res = fit_linear_model(
-        true_val,
-        covariates.assign(null_pred=null_pred),
-        add_intercept=add_intercept
+        true_val, covariates.assign(null_pred=null_pred), add_intercept=add_intercept
     )
 
     # Full (matched) evaluation regression: y ~ C + null_pred + gen_pred
@@ -160,7 +172,7 @@ def incremental_r2_matched_null(true_val, full_pred, null_pred, covariates):
         true_val,
         covariates.assign(null_pred=null_pred, gen_pred=gen_pred),
         # covariates.assign(null_pred=null_pred, full_pred=full_pred),
-        add_intercept=add_intercept
+        add_intercept=add_intercept,
     )
 
     return full_res.rsquared - null_res.rsquared
@@ -179,16 +191,11 @@ def load_lit_from_pt(prs_dataset, pt_path, map_location="cpu", strict=True):
 
     # Robust inference so loading never depends on stale config defaults
     use_global_head = cfg.get(
-        "use_global_head",
-        any(k.startswith("global_head.") for k in state.keys())
+        "use_global_head", any(k.startswith("global_head.") for k in state.keys())
     )
-    global_head_bias = cfg.get(
-        "global_head_bias",
-        ("global_head.bias" in state)
-    )
+    global_head_bias = cfg.get("global_head_bias", ("global_head.bias" in state))
     use_ard_bias = cfg.get(
-        "use_ard_bias",
-        ("expert_bias" in state) or ("expert_bias_log_scale" in state)
+        "use_ard_bias", ("expert_bias" in state) or ("expert_bias_log_scale" in state)
     )
 
     group_getitem_cols = {
@@ -215,11 +222,9 @@ def load_lit_from_pt(prs_dataset, pt_path, map_location="cpu", strict=True):
         hard_ste=cfg.get("hard_ste", True),
         lb_coef=cfg.get("lb_coef", 0.0),
         eps=cfg.get("eps", 1e-12),
-
         use_ard_bias=use_ard_bias,
         use_global_head=use_global_head,
         global_head_bias=global_head_bias,
-
         ent_coef=cfg.get("ent_coef_start", 0.0),
         ent_coef_end=cfg.get("ent_coef_end", None),
         ent_warm_epochs=cfg.get("ent_warm_epochs", 0),
@@ -238,7 +243,8 @@ def load_lit_from_pt(prs_dataset, pt_path, map_location="cpu", strict=True):
 
 
 class TorchMoEWrapper:
-    ''' inference wrapper around a trained Lit_MoEPRS model to expose predict and predict_proba methods '''
+    """inference wrapper around a trained Lit_MoEPRS model to expose predict and predict_proba methods"""
+
     def __init__(self, lit_model, scaler_dir=None, batch_size=65536, device="cpu"):
         self.lit_model = lit_model
         self.scaler_dir = scaler_dir
@@ -252,7 +258,11 @@ class TorchMoEWrapper:
         self.expert_cols = self.lit_model.group_getitem_cols["experts"]
 
     def _prep_dataset(self, prs_dataset):
-        d = apply_saved_scaler(prs_dataset, self.scaler_dir) if self.scaler_dir else copy.deepcopy(prs_dataset)
+        d = (
+            apply_saved_scaler(prs_dataset, self.scaler_dir)
+            if self.scaler_dir
+            else copy.deepcopy(prs_dataset)
+        )
 
         # Ensure dataset groups match training-time groups
         expected = self.lit_model.group_getitem_cols
@@ -297,3 +307,23 @@ class TorchMoEWrapper:
                 outs.append(p.detach().cpu().numpy())
 
         return np.concatenate(outs, axis=0)
+
+
+def get_model_name_mapper():
+    """
+    Get a mapping between model ID and model name for
+    each analysis ID.
+    """
+
+    mapper = {}
+
+    for ptf in glob.glob(osp.dirname(osp.dirname(__file__)), "*_prs_table.csv"):
+        df = pd.read_csv(ptf, usecols=["AnalysisID", "PGS", "PGS_Name"])
+        mapper.update(
+            {
+                k: dict(zip(g["PGS"], g["PGS_trait"]))
+                for k, g in df.groupby("AnalysisID")
+            }
+        )
+
+    return mapper
