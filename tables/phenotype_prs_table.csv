@@ -47,14 +47,6 @@ SBP_MA,Systolic blood pressure,SBP,"EFO_0006335",PGS003967,PGS003967,EUR,
 SBP_ADJ_MA,Systolic blood pressure (Adj.),SBP_adj,"EFO_0006335",PGS003965,PGS003965,AFR,
 SBP_ADJ_MA,Systolic blood pressure (Adj.),SBP_adj,"EFO_0006335",PGS003966,PGS003966,EAS,
 SBP_ADJ_MA,Systolic blood pressure (Adj.),SBP_adj,"EFO_0006335",PGS003967,PGS003967,EUR,
-LOG_TST_SEX,Log Testosterone,LOG_TST,"EFO_0004908",PGS_TST_M,,Male,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-LOG_TST_SEX,Log Testosterone,LOG_TST,"EFO_0004908",PGS_TST_F,,Female,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-URT_SEX,Urate,URT,"EFO_0004531",PGS_URT_M,,Male,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-URT_SEX,Urate,URT,"EFO_0004531",PGS_URT_F,,Female,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-LOG_CRTN_SEX,Log Creatinine,LOG_CRTN,"EFO_0004518",PGS_CRTN_M,,Male,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-LOG_CRTN_SEX,Log Creatinine,LOG_CRTN,"EFO_0004518",PGS_CRTN_F,,Female,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-WHR_SEX,Waist-hip ratio,WHR,"EFO_0004343",PGS_WHR_M,,Male,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
-WHR_SEX,Waist-hip ratio,WHR,"EFO_0004343",PGS_WHR_F,,Female,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
 ASTHMA_MA,Asthma,ASTHMA,"MONDO_0004979",PGS005121,PGS005121,AFR,"phecode: 495"
 ASTHMA_MA,Asthma,ASTHMA,"MONDO_0004979",PGS005128,PGS005128,EAS,"phecode: 495"
 ASTHMA_MA,Asthma,ASTHMA,"MONDO_0004979",PGS005134,PGS005134,EUR,"phecode: 495"
@@ -64,3 +56,11 @@ T2D_MA,Type 2 Diabetes,T2D,"MONDO_0005148",PGS005245,PGS005245,EAS,"phecode: 250
 T2D_MA,Type 2 Diabetes,T2D,"MONDO_0005148",PGS005246,PGS005246,EUR,"phecode: 250.2"
 T2D_MA,Type 2 Diabetes,T2D,"MONDO_0005148",PGS005244,PGS005244,AMR,"phecode: 250.2"
 T2D_MA,Type 2 Diabetes,T2D,"MONDO_0005148",PGS005247,PGS005247,CSA,"phecode: 250.2"
+LOG_TST_SEX,Log Testosterone,LOG_TST,"EFO_0004908",PGS_TST_M,,Male,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+LOG_TST_SEX,Log Testosterone,LOG_TST,"EFO_0004908",PGS_TST_F,,Female,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+URT_SEX,Urate,URT,"EFO_0004531",PGS_URT_M,,Male,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+URT_SEX,Urate,URT,"EFO_0004531",PGS_URT_F,,Female,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+LOG_CRTN_SEX,Log Creatinine,LOG_CRTN,"EFO_0004518",PGS_CRTN_M,,Male,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+LOG_CRTN_SEX,Log Creatinine,LOG_CRTN,"EFO_0004518",PGS_CRTN_F,,Female,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+WHR_SEX,Waist-hip ratio,WHR,"EFO_0004343",PGS_WHR_M,,Male,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+WHR_SEX,Waist-hip ratio,WHR,"EFO_0004343",PGS_WHR_F,,Female,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"

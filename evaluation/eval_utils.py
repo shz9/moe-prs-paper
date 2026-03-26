@@ -1,11 +1,9 @@
 import os.path as osp
 import sys
 
-parent_dir = osp.dirname(osp.dirname(osp.abspath(__file__)))
-sys.path.append(osp.join(parent_dir, "model/"))
 import numpy as np
 import pandas as pd
-from PRSDataset import PRSDataset
+from viprs.eval.eval_utils import fit_linear_model
 
 
 def generate_predictions(prs_dataset, models, use_only_prs=True):
@@ -251,3 +249,62 @@ def rank_individuals_by_pc_distance(prs_dataset, reference="median", n_clusters=
         n_clusters,
         labels=[f"PC_DIST (Q{i})" for i in range(1, n_clusters + 1)],
     )
+
+
+def average_precision_at_top_percentile(y_true, y_pred, percentile=0.05):
+    """
+    Computes average precision for identifying the top percentile of y_true using y_pred.
+
+    Parameters:
+    - y_true: array-like, true continuous target values
+    - y_pred: array-like, predicted scores
+    - percentile: float, e.g., 0.05 for top 5%
+
+    Returns:
+    - average_precision: float, average precision score
+    """
+    y_true = np.asarray(y_true)
+    y_pred = np.asarray(y_pred)
+
+    # Determine the threshold to consider top percentile
+    threshold = np.percentile(y_true, 100 * (1 - percentile))  # top X%
+
+    # Binary labels: 1 if in top X%, else 0
+    y_top = (y_true >= threshold).astype(int)
+
+    from sklearn.metrics import average_precision_score
+
+    # Average precision score
+    ap = average_precision_score(y_top, y_pred)
+
+    return ap
+
+
+def incremental_r2_matched_null(true_val, full_pred, null_pred, covariates):
+    true_val = np.asarray(true_val).reshape(-1)
+    full_pred = np.asarray(full_pred).reshape(-1)
+    null_pred = np.asarray(null_pred).reshape(-1)
+
+    # genetic increment (what changes when you "turn on PRS")
+    gen_pred = full_pred - null_pred
+
+    if covariates is None:
+        covariates = pd.DataFrame({"const": np.ones(len(true_val))})
+        add_intercept = False
+    else:
+        add_intercept = True
+
+    # Null (matched) evaluation regression: y ~ C + null_pred
+    null_res = fit_linear_model(
+        true_val, covariates.assign(null_pred=null_pred), add_intercept=add_intercept
+    )
+
+    # Full (matched) evaluation regression: y ~ C + null_pred + gen_pred
+    full_res = fit_linear_model(
+        true_val,
+        covariates.assign(null_pred=null_pred, gen_pred=gen_pred),
+        # covariates.assign(null_pred=null_pred, full_pred=full_pred),
+        add_intercept=add_intercept,
+    )
+
+    return full_res.rsquared - null_res.rsquared

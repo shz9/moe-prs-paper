@@ -182,6 +182,6 @@ if __name__ == "__main__":
     extract_pgsc_ancestry(args.biobank)
 
     print("> Extracting PRS scores from the PGSC pipeline...")
-    extract_pgsc_scores(args.biobank)
+    extract_pgsc_scores(args.biobank, args.pgs_table)
 
     print("Done!")

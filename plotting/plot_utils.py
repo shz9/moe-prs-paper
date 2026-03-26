@@ -1,12 +1,25 @@
 import os.path as osp
+import sys
 
 import pandas as pd
 
-df = pd.read_csv(
-    osp.join(osp.dirname(osp.dirname(__file__)), "tables/phenotype_prs_table.csv")
-)
-MODEL_NAME_MAP = dict(zip(df["PGS"], df["Training_cohort"]))
-PHENOTYPE_NAME_MAP = dict(zip(df["Phenotype_short"], df["Phenotype"]))
+parent_dir = osp.dirname(osp.dirname(osp.abspath(__file__)))
+sys.path.append(parent_dir)
+sys.path.append(osp.join(parent_dir, "model/"))
+
+from model_utils import get_analysis_id_mapper, get_model_name_mapper
+
+# --------------------------------------------------------
+
+
+MODEL_NAME_MAP = get_model_name_mapper()
+ANALYSIS_TO_PHENOTYPE_MAP = get_analysis_id_mapper(target_col="Phenotype")
+ANALYSIS_TO_SHORT_PHENOTYPE_MAP = get_analysis_id_mapper(target_col="Phenotype_short")
+
+GROUP_MAP = {"0": "Female", "1": "Male"}
+
+# --------------------------------------------------------
+
 BIOBANK_NAME_MAP = {
     "ukbb": "UK Biobank",
     "cartagene": "CARTaGENE",
@@ -17,7 +30,8 @@ BIOBANK_NAME_MAP_SHORT = {
     "cartagene": "CaG",
 }
 
-GROUP_MAP = {"0": "Female", "1": "Male"}
+# --------------------------------------------------------
+# Sorting lists:
 
 SORTED_ANCESTRY_LABEL = ["All", "EUR", "MID", "CSA", "EAS", "AMR", "AFR", "OTH"]
 SORTED_COARSE_ANCESTRY_LABEL = ["All", "EUR", "non-EUR"]
@@ -70,6 +84,9 @@ CARTAGENE_SORTED_UMAP_CLUSTERS = [
     "1-EAS",
     "0-HAI-CAR",
 ]
+
+# --------------------------------------------------------
+# Helper functions:
 
 
 def assign_ancestry_consistent_colors(groups, palette="Set3"):
@@ -148,9 +165,9 @@ def read_eval_metrics(file_path):
     """
 
     eval_df = pd.read_csv(file_path)
-    phenotype_id = file_path.split("/")[-3]
+    analysis_id = file_path.split("/")[-3]
 
-    eval_df["Phenotype"] = phenotype_id
+    eval_df["AnalysisID"] = analysis_id
     eval_df["Test biobank"] = file_path.split("/")[-2].upper()
 
     return eval_df

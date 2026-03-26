@@ -1,13 +1,12 @@
+import argparse
 import os.path as osp
 import sys
 
 import numpy as np
 import pandas as pd
+from magenpy.utils.system_utils import makedir
 
 sys.path.append(osp.dirname(osp.dirname(osp.dirname(__file__))))
-import argparse
-
-from magenpy.utils.system_utils import makedir
 
 from model.PRSDataset import PRSDataset
 
@@ -18,7 +17,7 @@ def create_prs_dataset(
     # Read the phenotype file for individuals in this biobank:
     pheno_df = pd.read_csv(
         f"data/phenotypes/{biobank}/{phenotype}.txt",
-        sep=r"\t",
+        sep="\t",
         names=["FID", "IID", phenotype],
     )
     # Drop individuals with missing phenotype information:
@@ -27,7 +26,7 @@ def create_prs_dataset(
     print("> Number of samples with valid measurements:", len(pheno_df))
 
     # Read the csv file containing the PRS scores for this phenotype and biobank:
-    score_df = pd.read_csv(f"data/scores/{phenotype}/{biobank}.csv.gz", sep=r"\s+")
+    score_df = pd.read_csv(f"data/scores/{phenotype}/{biobank}.csv.gz", sep="\t")
 
     prs_cols = [col for col in score_df.columns if col not in ("FID", "IID")]
 
@@ -39,7 +38,7 @@ def create_prs_dataset(
 
     # Read the cluster assignment for individuals in this Biobank (from Alex Diaz-Papkovich):
     cluster_assignment = pd.read_csv(
-        f"data/covariates/{biobank}/cluster_assignment.txt", sep=r"\s+"
+        f"data/covariates/{biobank}/cluster_assignment.txt", sep="\t"
     )
     # Read the cluster interpretation file (i.e. map the cluster ID to names / descriptions):
     cluster_interp = pd.read_csv(
@@ -86,7 +85,7 @@ def create_prs_dataset(
     covar_df = pd.read_csv(
         f"data/covariates/{biobank}/covars_{pcs_source}_pcs.txt",
         names=["FID", "IID"] + covariates_cols,
-        sep=r"\s+",
+        sep="\t",
     )
 
     score_df = score_df.merge(covar_df, on=["FID", "IID"])

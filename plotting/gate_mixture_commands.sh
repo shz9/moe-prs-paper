@@ -9,26 +9,26 @@ source env/moe/bin/activate
 
 train_biobank=${1:-"ukbb"}
 
-mapfile -t phenotypes < <(
+mapfile -t analyses < <(
   find data/harmonized_data/ -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -u
 )
-sex_stratified_phenotypes=("TST" "URT" "CRTN" "WHR")
+sex_stratified_analyses=("LOG_TST_SEX" "URT_SEX" "LOG_CRTN_SEX" "WHR_SEX")
 
 echo "> Processing data for models trained on ${train_biobank}..."
 
-# Loop over the phenotypes:
-for phenotype in "${phenotypes[@]}"
+# Loop over the analysis datasets:
+for analysis in "${analyses[@]}"
 do
 
-  if [[ "${sex_stratified_phenotypes[*]}" =~ "$phenotype" ]]; then
+  if [[ "${sex_stratified_analyses[*]}" =~ "$analysis" ]]; then
       category="Sex"
   else
       category="Ancestry"
   fi
 
-  for dataset in data/harmonized_data/"$phenotype"/"$train_biobank"/test_*.pkl
+  for dataset in data/harmonized_data/"$analysis"/"$train_biobank"/test_*.pkl
   do
-    for model in data/trained_models/"$phenotype"/"$train_biobank"/*/Mo*.pkl
+    for model in data/trained_models/"$analysis"/"$train_biobank"/*/Mo*.pkl
     do
       # Check that the model exists before invoking the plotting script:
       if [ ! -f "$model" ]; then

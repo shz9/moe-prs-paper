@@ -11,10 +11,10 @@ sys.path.append(osp.dirname(osp.dirname(osp.dirname(__file__))))
 
 from baseline_models import AncestryWeightedPRS, MultiPRS
 from grid_search import custom_cv_grid_search, get_gate_penalty_ladder
+from model_utils import Timer, get_model_name_mapper
 from moe import MoEPRS
 from moe_pytorch import Lit_MoEPRS, make_deterministic, train_model
 from PRSDataset import PRSDataset
-from utils import Timer, get_model_name_mapper
 
 
 def train_baseline_linear_models(

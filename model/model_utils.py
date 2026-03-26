@@ -5,6 +5,7 @@ import os.path as osp
 import pickle
 import threading
 import time
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -12,7 +13,6 @@ import psutil
 import torch
 from moe_pytorch import Lit_MoEPRS
 from torch.utils.data import DataLoader
-from viprs.eval.eval_utils import fit_linear_model
 
 
 class Timer:
@@ -148,36 +148,6 @@ def apply_saved_scaler(prs_dataset, scaler_dir, scaler_name="MoE-PyTorch.scaler.
     return d
 
 
-def incremental_r2_matched_null(true_val, full_pred, null_pred, covariates):
-    true_val = np.asarray(true_val).reshape(-1)
-    full_pred = np.asarray(full_pred).reshape(-1)
-    null_pred = np.asarray(null_pred).reshape(-1)
-
-    # genetic increment (what changes when you "turn on PRS")
-    gen_pred = full_pred - null_pred
-
-    if covariates is None:
-        covariates = pd.DataFrame({"const": np.ones(len(true_val))})
-        add_intercept = False
-    else:
-        add_intercept = True
-
-    # Null (matched) evaluation regression: y ~ C + null_pred
-    null_res = fit_linear_model(
-        true_val, covariates.assign(null_pred=null_pred), add_intercept=add_intercept
-    )
-
-    # Full (matched) evaluation regression: y ~ C + null_pred + gen_pred
-    full_res = fit_linear_model(
-        true_val,
-        covariates.assign(null_pred=null_pred, gen_pred=gen_pred),
-        # covariates.assign(null_pred=null_pred, full_pred=full_pred),
-        add_intercept=add_intercept,
-    )
-
-    return full_res.rsquared - null_res.rsquared
-
-
 def load_lit_from_pt(prs_dataset, pt_path, map_location="cpu", strict=True):
     """
     Rebuild Lit_MoEPRS from checkpoint config, robust to global_head_bias changes.
@@ -309,21 +279,38 @@ class TorchMoEWrapper:
         return np.concatenate(outs, axis=0)
 
 
+@lru_cache(maxsize=None)
+def get_analysis_tables():
+    tabs = {}
+    for f in glob.glob(osp.dirname(osp.dirname(__file__)), "*_prs_table.csv"):
+        tabs[osp.basename(f)] = pd.read_csv(f)
+
+    return tabs
+
+
 def get_model_name_mapper():
     """
     Get a mapping between model ID and model name for
     each analysis ID.
     """
 
+    tables = get_analysis_tables()
+
     mapper = {}
 
-    for ptf in glob.glob(osp.dirname(osp.dirname(__file__)), "*_prs_table.csv"):
-        df = pd.read_csv(ptf, usecols=["AnalysisID", "PGS", "PGS_Name"])
+    for df in tables.values():
         mapper.update(
-            {
-                k: dict(zip(g["PGS"], g["PGS_trait"]))
-                for k, g in df.groupby("AnalysisID")
-            }
+            {k: dict(zip(g["PGS"], g["PGS_Name"])) for k, g in df.groupby("AnalysisID")}
         )
 
     return mapper
+
+
+def get_analysis_id_mapper(target_col):
+    tabs = get_analysis_tables()
+
+    combined_df = pd.concat(
+        [df[["AnalysisID", target_col]].unique() for df in tabs.values()]
+    )
+
+    return dict(zip(combined_df["AnalysisID"], combined_df[target_col]))
