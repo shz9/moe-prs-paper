@@ -44,7 +44,12 @@ def plot_expert_weights_wrt_gate_input(moe_model, dataset, steps=1000):
 
 
 def gate_parameters_heatmap(
-    moe_model, figsize=(6, 6), annot=False, title=None, output_file=None
+    moe_model,
+    analysis_id=None,
+    figsize=(6, 6),
+    annot=False,
+    title=None,
+    output_file=None,
 ):
     """
     Plot the gating parameters as a heatmap. On the X-axis (horizontally), we'll show
@@ -55,14 +60,22 @@ def gate_parameters_heatmap(
     :param output_file: The name of the file to save the plot to. If None, the plot will be shown.
     """
 
-    gate_params = moe_model.get_model_parameters()["gate_params"]
+    gate_params = moe_model.get_model_parameters(return_dataframe=True)["gate_params"]
     # Add a zero column for the missing expert:
     gate_params[
         [c for c in moe_model.expert_cols if c not in gate_params.columns][0]
     ] = 0.0
-    gate_params.columns = [
-        MODEL_NAME_MAP.get(c, c) + ["", "(*)"][i == gate_params.shape[1] - 1]
-        for i, c in enumerate(gate_params.columns)
+
+    if analysis_id is not None:
+        gate_params.columns = [
+            MODEL_NAME_MAP[analysis_id].get(c, c)
+            + ["", "(*)"][i == gate_params.shape[1] - 1]
+            for i, c in enumerate(gate_params.columns)
+        ]
+
+    # Convert PRS names if they occur as input to the gating model:
+    gate_params.index = [
+        MODEL_NAME_MAP[analysis_id].get(c, c) for c in gate_params.index
     ]
 
     # Sort the columns by the PC order:

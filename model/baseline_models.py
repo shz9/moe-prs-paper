@@ -84,14 +84,18 @@ class MultiPRS(object):
             else:
                 self.reg_model = LinearRegression(fit_intercept=add_intercept)
         else:
-            if penalty == 0.0:
-                penalty = np.inf
+            penalty_params = {"penalty": penalty_type}
+
+            if penalty_type is not None:
+                if penalty == 0:
+                    penalty_params["C"] = np.inf
+                else:
+                    penalty_params["C"] = penalty
 
             self.reg_model = LogisticRegression(
                 fit_intercept=add_intercept,
                 class_weight=class_weights,
-                penalty=penalty_type,
-                C=penalty,
+                **penalty_params,
             )
 
     @classmethod
@@ -713,6 +717,277 @@ class AncestryWeightedPRS(object):
                     self.data_scaler,
                     self.family,
                     self.min_rep_prop,
+                ],
+                outf,
+            )
+
+
+class AttributePartitionedPRS(object):
+    """
+    PRS model using a categorical attribute for hard partitioning.
+
+    Each attribute value defines a subgroup:
+      - A specific PRS column is used for that subgroup
+      - A separate model is fitted per subgroup
+
+    No weighting or mixing is performed.
+
+    Samples whose attribute value is not in attribute_to_score_map:
+      - are excluded from training
+      - return NaN at prediction time
+
+    Parameters
+    ----------
+    prs_dataset : object or None
+    partition_attribute : str
+        Column used to partition individuals (e.g. "Sex")
+    attribute_to_score_map : dict
+        Mapping {attribute_value: prs_column_name}
+    covariates_cols : list or str or None
+    class_weights : dict or "balanced" or None
+    add_intercept : bool
+    standardize_data : bool
+    penalty_type : {"l1","l2","elasticnet",None}
+    penalty : float
+    """
+
+    def __init__(
+        self,
+        prs_dataset=None,
+        partition_attribute=None,
+        attribute_to_score_map=None,
+        covariates_cols=None,
+        class_weights=None,
+        add_intercept=True,
+        standardize_data=True,
+        penalty_type=None,
+        penalty=0.0,
+    ):
+        # ---------------------------
+        # Sanity checks
+        assert penalty >= 0.0
+        if penalty > 0.0:
+            assert penalty_type is not None
+
+        if prs_dataset is not None:
+            assert partition_attribute is not None
+            assert attribute_to_score_map is not None
+
+        self.partition_attribute = partition_attribute
+        self.attribute_to_score_map = attribute_to_score_map
+        self.class_weights = class_weights
+
+        self.covariates_cols = covariates_cols
+        if isinstance(self.covariates_cols, str):
+            self.covariates_cols = [self.covariates_cols]
+
+        # ----------------------------
+        # If the covariates columns include the partition attribute, remove it.
+        # E.g. if partition attribute is sex, we don't want to include sex as a covariate anymore.
+
+        if self.covariates_cols is not None:
+            self.covariates_cols = [
+                c for c in self.covariates_cols if c != self.partition_attribute
+            ]
+
+        # ----------------------------
+
+        # ordered mapping
+        self.attribute_values = (
+            list(attribute_to_score_map.keys()) if attribute_to_score_map else None
+        )
+        self.score_cols = (
+            [attribute_to_score_map[k] for k in self.attribute_values]
+            if attribute_to_score_map
+            else None
+        )
+
+        # data
+        self.phenotype = None
+        self.input_data = None
+        self.data_scaler = None
+        self.family = None
+
+        # model(s)
+        self.reg_model = None
+
+        # hyperparams
+        self._penalty_type = penalty_type
+        self._penalty = penalty
+        self._add_intercept = add_intercept
+
+        # ---------------------------
+        # Load data
+        if prs_dataset is not None:
+            if standardize_data:
+                prs_dataset.standardize_data()
+                self.data_scaler = copy.deepcopy(prs_dataset.scaler)
+
+            self.phenotype = prs_dataset.get_phenotype().reshape(-1, 1)
+            self.input_data = self._extract_input_data(prs_dataset)
+            self.family = prs_dataset.phenotype_likelihood
+
+        # ---------------------------
+        # Build base model
+        if self.input_data is not None:
+            if self.family == "gaussian":
+                if self._penalty_type == "l1":
+                    base = Lasso(alpha=self._penalty, fit_intercept=add_intercept)
+                elif self._penalty_type == "l2":
+                    base = Ridge(alpha=self._penalty, fit_intercept=add_intercept)
+                elif self._penalty_type == "elasticnet":
+                    base = ElasticNet(alpha=self._penalty, fit_intercept=add_intercept)
+                else:
+                    base = LinearRegression(fit_intercept=add_intercept)
+            else:
+                C = self._penalty if (self._penalty and self._penalty > 0.0) else np.inf
+                base = LogisticRegression(
+                    fit_intercept=add_intercept,
+                    class_weight=self.class_weights,
+                    penalty=self._penalty_type,
+                    C=C,
+                    max_iter=1000,
+                )
+
+            # one model per attribute value
+            self.reg_model = {k: copy.deepcopy(base) for k in self.attribute_values}
+
+    # ---------------------------------------------------------------------
+    def _extract_input_data(self, prs_dataset, scaler=None):
+        attr = prs_dataset.get_data_columns([self.partition_attribute]).reshape(-1)
+        prs_data = prs_dataset.get_data_columns(self.score_cols, scaler=scaler)
+
+        if self.covariates_cols is not None:
+            covariates = prs_dataset.get_data_columns(
+                self.covariates_cols, scaler=scaler
+            )
+        else:
+            covariates = None
+
+        mapped_values = set(self.attribute_to_score_map.keys())
+
+        input_data = {}
+        for j, val in enumerate(self.attribute_values):
+            mask = attr == val
+            if mask.sum() == 0:
+                continue
+
+            prs_col = prs_data[:, j].reshape(-1, 1)
+
+            parts = []
+            if covariates is not None:
+                parts.append(covariates)
+            parts.append(prs_col)
+
+            input_data[val] = {
+                "data": np.concatenate(parts, axis=1),
+                "keep_samples": mask,
+            }
+
+        # store global valid mask
+        valid_mask = np.array([x in mapped_values for x in attr], dtype=bool)
+
+        return {"groups": input_data, "valid_mask": valid_mask}
+
+    # ---------------------------------------------------------------------
+    def fit(self):
+        assert self.input_data is not None
+        assert self.phenotype is not None
+
+        for val, dat in self.input_data["groups"].items():
+            keep = dat["keep_samples"]
+            self.reg_model[val].fit(
+                dat["data"][keep],
+                self.phenotype[keep],
+            )
+
+        return self
+
+    # ---------------------------------------------------------------------
+    def predict(self, prs_dataset=None):
+        if prs_dataset is None:
+            input_data = self.input_data
+        else:
+            input_data = self._extract_input_data(prs_dataset, scaler=self.data_scaler)
+
+        N = next(iter(input_data["groups"].values()))["data"].shape[0]
+        pred = np.full(N, np.nan)
+
+        for val, dat in input_data["groups"].items():
+            model = self.reg_model.get(val)
+            if model is None:
+                continue
+
+            keep = dat["keep_samples"]
+            X = dat["data"][keep]
+
+            if self.family == "gaussian":
+                pred[keep] = model.predict(X).flatten()
+            else:
+                pred[keep] = model.predict_proba(X)[:, 1]
+
+        return pred
+
+    # ---------------------------------------------------------------------
+    def predict_prs(self, prs_dataset=None, logit_scale=False):
+        if prs_dataset is None:
+            input_data = self.input_data
+        else:
+            input_data = self._extract_input_data(prs_dataset, scaler=self.data_scaler)
+
+        N = next(iter(input_data["groups"].values()))["data"].shape[0]
+        pred = np.full(N, np.nan)
+
+        for val, dat in input_data["groups"].items():
+            mdl = self.reg_model.get(val)
+            if mdl is None:
+                continue
+
+            keep = dat["keep_samples"]
+            prs_col = dat["data"][keep, -1]
+
+            coef = np.asarray(mdl.coef_).ravel()
+            lin = prs_col * coef[-1]
+
+            if self.family == "gaussian":
+                pred[keep] = lin
+            else:
+                pred[keep] = lin if logit_scale else expit(lin)
+
+        return pred
+
+    # ---------------------------------------------------------------------
+    def get_coefficients(self):
+        all_coefs = {}
+        for k, v in self.reg_model.items():
+            coefs = {"Intercept": v.intercept_}
+            if self.covariates_cols is not None:
+                coefs["Covariates"] = v.coef_.flatten()[: len(self.covariates_cols)]
+                coefs["PRS"] = v.coef_.flatten()[len(self.covariates_cols) :]
+            else:
+                coefs["PRS"] = v.coef_.flatten()
+            all_coefs[k] = coefs
+        return all_coefs
+
+    # ---------------------------------------------------------------------
+    def save(self, output_file):
+        try:
+            for _, m in self.reg_model.items():
+                check_is_fitted(m)
+        except NotFittedError:
+            raise NotFittedError("Call `.fit()` before saving.")
+
+        with open(output_file, "wb") as outf:
+            pickle.dump(
+                [
+                    self.reg_model,
+                    self.partition_attribute,
+                    self.attribute_to_score_map,
+                    self.attribute_values,
+                    self.score_cols,
+                    self.covariates_cols,
+                    self.data_scaler,
+                    self.family,
                 ],
                 outf,
             )

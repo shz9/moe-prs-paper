@@ -1,4 +1,11 @@
 #!/bin/bash
+#SBATCH --account=def-sgravel
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=4GB
+#SBATCH --time=04:00:00
+#SBATCH --output=./log/gate_plotting/%x.out
+#SBATCH --mail-user=shadi.zabad@mail.mcgill.ca
+#SBATCH --mail-type=FAIL
 
 # Loop over the datasets in data/harmonized_data directory,
 # find the relevant MoE models for each one, and then

@@ -21,6 +21,7 @@ from PRSDataset import PRSDataset
 
 
 def plot_admixture_graphs(
+    analysis_id,
     prs_dataset,
     model,
     title=None,
@@ -47,7 +48,7 @@ def plot_admixture_graphs(
     # Map the PRS IDs:
     mapped_prs_ids = []
     for prs_id in model.expert_cols:
-        mapped_prs_ids.append(MODEL_NAME_MAP.get(prs_id, prs_id))
+        mapped_prs_ids.append(MODEL_NAME_MAP[analysis_id].get(prs_id, prs_id))
 
     proba = pd.DataFrame(proba, columns=mapped_prs_ids)
 
@@ -188,6 +189,9 @@ if __name__ == "__main__":
     sns.set_context("paper", font_scale=2)
 
     p_dataset = PRSDataset.from_pickle(args.dataset)
+
+    analysis_id = args.dataset.split("/")[2]
+
     moe_like = load_model_any(
         p_dataset,
         args.model,
@@ -206,10 +210,13 @@ if __name__ == "__main__":
 
     if args.group_col is None:
         plot_output_file = osp.join(data_path, model_path + args.extension)
-        plot_admixture_graphs(p_dataset, moe_like, output_file=plot_output_file)
+        plot_admixture_graphs(
+            analysis_id, p_dataset, moe_like, output_file=plot_output_file
+        )
     else:
         for gcol in args.group_col:
             plot_admixture_graphs(
+                analysis_id,
                 p_dataset,
                 moe_like,
                 group_col=gcol,

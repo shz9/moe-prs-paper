@@ -18,6 +18,7 @@ from evaluate_predictive_performance import stratified_evaluation
 from moe import MoEPRS
 from plot_predictive_performance import postprocess_metrics_df
 from plot_utils import (
+    ANALYSIS_TO_PHENOTYPE_MAP,
     BIOBANK_NAME_MAP_SHORT,
     GROUP_MAP,
     assign_ancestry_consistent_colors,
@@ -154,7 +155,7 @@ def extract_weights_data(biobank="ukbb"):
 
         prs_col_names = []
         for prs_col in dataset.prs_cols:
-            if "_F" in prs_col:
+            if prs_col.endswith("_F"):
                 prs_col_names.append("P(Female_PGS)")
             else:
                 prs_col_names.append("P(Male_PGS)")
@@ -209,46 +210,61 @@ def extract_stratified_evaluation_metrics(
     # Remove the "All" category:
     eval_df = eval_df.loc[eval_df["EvalGroup"] != "All"]
 
-    eval_df = eval_df.loc[eval_df["PGS"].isin([f"PGS_{pheno}_F", f"PGS_{pheno}_M"])]
+    uniq_pgs = eval_df["PGS"].unique()
+    male_pgs = [m for m in uniq_pgs if m.endswith("_M")][0]
+    female_pgs = [m for m in uniq_pgs if m.endswith("_F")][0]
+
+    eval_df = eval_df.loc[eval_df["PGS"].isin([male_pgs, female_pgs])]
 
     tr_df = eval_df.pivot(
         index="EvalGroup", columns="PGS", values="Incremental_R2"
     ).reset_index()
-    tr_df["Ratio"] = tr_df[f"PGS_{pheno}_M"] / tr_df[f"PGS_{pheno}_F"]
+    tr_df["Ratio"] = tr_df[male_pgs] / tr_df[female_pgs]
 
     return tr_df
 
 
-def plot_stratified_evaluation_creatinine():
-    ukb_mid_data = extract_stratified_evaluation_metrics(
-        "CRTN", "ukbb", keep_ancestry=["MID"]
-    )
-    ukb_mid_data["Cohort"] = "MID Samples in UKB"
-    ukb_afr_data = extract_stratified_evaluation_metrics(
-        "CRTN", "ukbb", keep_ancestry=["AFR"]
-    )
-    ukb_afr_data["Cohort"] = "AFR Samples in UKB"
-    ukb_csa_data = extract_stratified_evaluation_metrics(
-        "CRTN", "ukbb", keep_ancestry=["CSA"]
-    )
-    ukb_csa_data["Cohort"] = "CSA Samples in UKB"
-    cag_noneur_data = extract_stratified_evaluation_metrics(
-        "CRTN", "cartagene", exclude_ancestry=["EUR"]
-    )
-    cag_noneur_data["Cohort"] = "Non-European Samples in CaG"
-    cag_eur_data = extract_stratified_evaluation_metrics(
-        "CRTN", "cartagene", keep_ancestry=["EUR"]
-    )
-    cag_eur_data["Cohort"] = "European Samples in CaG"
+def plot_relative_stratified_evaluation(
+    phenotype: str, cohort_specs: list[dict], output_path: str
+):
+    """
+    Plot stratified evaluation metrics for a given phenotype.
 
-    combined_df = pd.concat(
-        [ukb_mid_data, ukb_afr_data, ukb_csa_data, cag_noneur_data, cag_eur_data],
-        axis=0,
-        ignore_index=True,
-    )
+    Parameters
+    ----------
+    phenotype : str
+        Phenotype code passed to extract_stratified_evaluation_metrics.
+    cohort_specs : list[dict]
+        Each dict should contain:
+          - "dataset": e.g. "ukbb" or "cartagene"
+          - "label": cohort label for plotting
+          - either "keep_ancestry": list[str] or "exclude_ancestry": list[str]
+    output_path : str
+        Path to save the PDF.
+    title_label : str
+        Text used in the plot title.
+    """
+    dfs = []
+
+    for spec in cohort_specs:
+        kwargs = {}
+        if "keep_ancestry" in spec:
+            kwargs["keep_ancestry"] = spec["keep_ancestry"]
+        if "exclude_ancestry" in spec:
+            kwargs["exclude_ancestry"] = spec["exclude_ancestry"]
+
+        df = extract_stratified_evaluation_metrics(
+            phenotype,
+            spec["dataset"],
+            **kwargs,
+        )
+        df["Cohort"] = spec["label"]
+        dfs.append(df)
+
+    combined_df = pd.concat(dfs, axis=0, ignore_index=True)
 
     g = sns.catplot(
-        combined_df,
+        data=combined_df,
         kind="bar",
         x="EvalGroup",
         y="Ratio",
@@ -270,78 +286,12 @@ def plot_stratified_evaluation_creatinine():
     )
     g.fig.supxlabel("Evaluation Group", multialignment="center")
     g.fig.suptitle(
-        "Stratified Relative Prediction Accuracy (Creatinine)", multialignment="center"
-    )
-
-    g.fig.tight_layout()
-
-    plt.savefig(
-        "figures/section_1/stratified_creatinine_accuracy.pdf",
-        bbox_inches="tight",
-        dpi=400,
-    )
-    plt.close()
-
-
-def plot_stratified_evaluation_urate():
-    ukb_eas_data = extract_stratified_evaluation_metrics(
-        "URT", "ukbb", keep_ancestry=["EAS"]
-    )
-    ukb_eas_data["Cohort"] = "EAS Samples in UKB"
-    ukb_afr_data = extract_stratified_evaluation_metrics(
-        "URT", "ukbb", keep_ancestry=["AFR"]
-    )
-    ukb_afr_data["Cohort"] = "AFR Samples in UKB"
-    ukb_csa_data = extract_stratified_evaluation_metrics(
-        "URT", "ukbb", keep_ancestry=["CSA"]
-    )
-    ukb_csa_data["Cohort"] = "CSA Samples in UKB"
-    cag_noneur_data = extract_stratified_evaluation_metrics(
-        "URT", "cartagene", exclude_ancestry=["EUR"]
-    )
-    cag_noneur_data["Cohort"] = "Non-European Samples in CaG"
-    cag_eur_data = extract_stratified_evaluation_metrics(
-        "URT", "cartagene", keep_ancestry=["EUR"]
-    )
-    cag_eur_data["Cohort"] = "European Samples in CaG"
-
-    combined_df = pd.concat(
-        [ukb_eas_data, ukb_afr_data, ukb_csa_data, cag_noneur_data, cag_eur_data],
-        axis=0,
-        ignore_index=True,
-    )
-
-    g = sns.catplot(
-        combined_df,
-        kind="bar",
-        x="EvalGroup",
-        y="Ratio",
-        row="Cohort",
-        height=2.0,
-        aspect=2.5,
-        sharey=False,
-        hue="EvalGroup",
-        palette=["#F98866", "#F98866", "#A1BE95", "#A1BE95"],
-    )
-
-    for ax in g.axes.flatten():
-        ax.axhline(y=1.0, color="#878787", linestyle=":")
-
-    g.set_axis_labels(x_var="", y_var="")
-    g.fig.supylabel(
-        "Relative Incremental $R^2$\n(Male PRS/Female PRS Ratio)",
+        f"Stratified Relative Prediction Accuracy ({ANALYSIS_TO_PHENOTYPE_MAP[phenotype]})",
         multialignment="center",
     )
-    g.fig.supxlabel("Evaluation Group", multialignment="center")
-    g.fig.suptitle(
-        "Stratified Relative Prediction Accuracy (Urate)", multialignment="center"
-    )
 
     g.fig.tight_layout()
-
-    plt.savefig(
-        "figures/section_1/stratified_urate_accuracy.pdf", bbox_inches="tight", dpi=400
-    )
+    plt.savefig(output_path, bbox_inches="tight", dpi=400)
     plt.close()
 
 
@@ -389,7 +339,6 @@ def extract_accuracy_data(
         dfs.append(df)
 
     dfs = pd.concat(dfs, axis=0).reset_index(drop=True)
-    dfs["Phenotype"] = dfs["Phenotype"].map(phenotypes)
     dfs["Phenotype"] += {"ukbb": " (UKB)", "cartagene": " (CaG)"}[test_biobank]
 
     return dfs
@@ -408,8 +357,10 @@ def plot_phenotypic_variance(pheno, biobank="ukbb"):
         dataset.data["SexG"].values + " (" + dataset.data["AgeGroup2"].values + ")"
     )
 
+    pheno_col = dataset.phenotype_col
+
     summary = (
-        dataset.data.groupby(["Ancestry", "Sex+Age"])[pheno]
+        dataset.data.groupby(["Ancestry", "Sex+Age"])[pheno_col]
         .agg(["var", "count"])
         .reset_index()
     )
@@ -438,16 +389,19 @@ def plot_phenotypic_variance(pheno, biobank="ukbb"):
             ax.axvspan(i - 0.5, i + 0.5, color="lightgray", alpha=0.2, zorder=0)
 
     ax.axhline(
-        np.var(dataset.data[pheno]), ls="--", color="silver", label="Overall variance"
+        np.var(dataset.data[pheno_col]),
+        ls="--",
+        color="silver",
+        label="Overall variance",
     )
     ax.axhline(
-        np.var(dataset.data.loc[dataset.data["SexG"] == "Female", pheno]),
+        np.var(dataset.data.loc[dataset.data["SexG"] == "Female", pheno_col]),
         ls="--",
         color="#F98866",
         label="Female variance",
     )
     ax.axhline(
-        np.var(dataset.data.loc[dataset.data["SexG"] == "Male", pheno]),
+        np.var(dataset.data.loc[dataset.data["SexG"] == "Male", pheno_col]),
         ls="--",
         color="#A1BE95",
         label="Male variance",
@@ -455,7 +409,7 @@ def plot_phenotypic_variance(pheno, biobank="ukbb"):
 
     sns.scatterplot(
         ax=ax,
-        data=dataset.data.groupby("Ancestry")[pheno].agg(["var"]).reset_index(),
+        data=dataset.data.groupby("Ancestry")[pheno_col].agg(["var"]).reset_index(),
         x="Ancestry",
         y="var",
         marker="D",
@@ -498,10 +452,10 @@ if __name__ == "__main__":
     makedir("figures/section_1/")
 
     phenotypes = {
-        "TST": "Testosterone",
-        "URT": "Urate",
-        "CRTN": "Creatinine",
-        "WHR": "Waist-hip ratio",
+        "LOG_TST_SEX": "Log Testosterone",
+        "URT_SEX": "Urate",
+        "LOG_CRTN_SEX": "Log Creatinine",
+        "WHR_SEX": "Waist-hip ratio",
     }
 
     palette = {
@@ -512,7 +466,7 @@ if __name__ == "__main__":
     }
 
     hue_order = ["MoEPRS", "MultiPRS", "Female PRS", "Male PRS"]
-    phenotype_order = ["Waist-hip ratio", "Testosterone", "Creatinine", "Urate"]
+    phenotype_order = ["Waist-hip ratio", "Log Testosterone", "Log Creatinine", "Urate"]
 
     ukbb_metrics_dfs = extract_accuracy_data()
 
@@ -527,6 +481,7 @@ if __name__ == "__main__":
     plot_combined_accuracy_metrics(
         ukbb_metrics_dfs,
         "figures/section_1/ukb_accuracy_subpanels.pdf",
+        column="Phenotype",
         col_order=ukb_col_order,
         palette=palette,
         hue_order=hue_order,
@@ -557,11 +512,13 @@ if __name__ == "__main__":
 
     cartagene_w_dfs = extract_weights_data(biobank="cartagene")
 
-    cag_col_order = [p + " (CaG)" for p in phenotype_order[1:]]
+    # Exclude testosterone:
+    cag_col_order = [p + " (CaG)" for p in phenotype_order if "Testosterone" not in p]
 
     plot_combined_accuracy_metrics(
         cartagene_metrics_dfs,
         "figures/section_1/cartagene_accuracy_subpanels.pdf",
+        column="Phenotype",
         col_order=cag_col_order,
         palette=palette,
         hue_order=hue_order,
@@ -582,12 +539,95 @@ if __name__ == "__main__":
 
     sns.set_context("paper", font_scale=1.25)
 
-    plot_stratified_evaluation_creatinine()
-    plot_stratified_evaluation_urate()
+    plot_relative_stratified_evaluation(
+        phenotype="LOG_CRTN_SEX",
+        output_path="figures/section_1/stratified_creatinine_accuracy.pdf",
+        cohort_specs=[
+            {
+                "dataset": "ukbb",
+                "label": "MID Samples in UKB",
+                "keep_ancestry": ["MID"],
+            },
+            {
+                "dataset": "ukbb",
+                "label": "AFR Samples in UKB",
+                "keep_ancestry": ["AFR"],
+            },
+            {
+                "dataset": "ukbb",
+                "label": "CSA Samples in UKB",
+                "keep_ancestry": ["CSA"],
+            },
+            {
+                "dataset": "cartagene",
+                "label": "Non-European Samples in CaG",
+                "exclude_ancestry": ["EUR"],
+            },
+            {
+                "dataset": "cartagene",
+                "label": "European Samples in CaG",
+                "keep_ancestry": ["EUR"],
+            },
+        ],
+    )
 
-    plot_phenotypic_variance("CRTN", biobank="ukbb")
-    plot_phenotypic_variance("URT", biobank="ukbb")
-    plot_phenotypic_variance("WHR", biobank="ukbb")
-    plot_phenotypic_variance("CRTN", biobank="cartagene")
-    plot_phenotypic_variance("URT", biobank="cartagene")
-    plot_phenotypic_variance("WHR", biobank="cartagene")
+    plot_relative_stratified_evaluation(
+        phenotype="URT_SEX",
+        output_path="figures/section_1/stratified_urate_accuracy.pdf",
+        cohort_specs=[
+            {
+                "dataset": "ukbb",
+                "label": "EAS Samples in UKB",
+                "keep_ancestry": ["EAS"],
+            },
+            {
+                "dataset": "ukbb",
+                "label": "AFR Samples in UKB",
+                "keep_ancestry": ["AFR"],
+            },
+            {
+                "dataset": "ukbb",
+                "label": "CSA Samples in UKB",
+                "keep_ancestry": ["CSA"],
+            },
+            {
+                "dataset": "cartagene",
+                "label": "Non-European Samples in CaG",
+                "exclude_ancestry": ["EUR"],
+            },
+            {
+                "dataset": "cartagene",
+                "label": "European Samples in CaG",
+                "keep_ancestry": ["EUR"],
+            },
+        ],
+    )
+
+    plot_relative_stratified_evaluation(
+        phenotype="LOG_TST_SEX",
+        output_path="figures/section_1/stratified_testosterone_accuracy.pdf",
+        cohort_specs=[
+            {
+                "dataset": "ukbb",
+                "label": "EAS Samples in UKB",
+                "keep_ancestry": ["EAS"],
+            },
+            {
+                "dataset": "ukbb",
+                "label": "AFR Samples in UKB",
+                "keep_ancestry": ["AFR"],
+            },
+            {
+                "dataset": "ukbb",
+                "label": "CSA Samples in UKB",
+                "keep_ancestry": ["CSA"],
+            },
+        ],
+    )
+
+    plot_phenotypic_variance("LOG_CRTN_SEX", biobank="ukbb")
+    plot_phenotypic_variance("URT_SEX", biobank="ukbb")
+    plot_phenotypic_variance("WHR_SEX", biobank="ukbb")
+    plot_phenotypic_variance("LOG_CRTN_SEX", biobank="cartagene")
+    plot_phenotypic_variance("URT_SEX", biobank="cartagene")
+    plot_phenotypic_variance("WHR_SEX", biobank="cartagene")

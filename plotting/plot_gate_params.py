@@ -12,7 +12,7 @@ sys.path.append(osp.join(parent_dir, "evaluation/"))
 
 from gate_interpretation import gate_parameters_heatmap
 from moe import MoEPRS
-from plot_utils import BIOBANK_NAME_MAP_SHORT, PHENOTYPE_NAME_MAP
+from plot_utils import ANALYSIS_TO_PHENOTYPE_MAP, BIOBANK_NAME_MAP_SHORT
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
@@ -31,16 +31,18 @@ if __name__ == "__main__":
     print(f"> Plotting gate parameters for {args.moe_model}...")
 
     for f in glob.glob(f"data/trained_models/*/*/train_data/{args.moe_model}.pkl"):
-        phenotype_code, biobank = f.split("/")[-4:-2]
+        analysis_id, biobank = f.split("/")[-4:-2]
 
-        phenotype = PHENOTYPE_NAME_MAP.get(phenotype_code, phenotype_code)
+        phenotype = ANALYSIS_TO_PHENOTYPE_MAP.get(analysis_id, analysis_id)
         biobank = BIOBANK_NAME_MAP_SHORT.get(biobank, biobank)
 
         makedir("figures/gate_parameters/")
 
         title = f"Learned gate parameters for {phenotype} ({biobank})"
-        output_f = f"figures/gate_parameters/{phenotype_code}_{biobank}.eps"
+        output_f = f"figures/gate_parameters/{analysis_id}_{biobank}.eps"
 
         print(f"> Processing model: {f}")
         model = MoEPRS.from_saved_model(f)
-        gate_parameters_heatmap(model, title=title, annot=True, output_file=output_f)
+        gate_parameters_heatmap(
+            model, analysis_id, title=title, annot=True, output_file=output_f
+        )

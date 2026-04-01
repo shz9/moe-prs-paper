@@ -12,9 +12,18 @@
 
 source "env/moe/bin/activate"
 
-analyis_id=${1:-"HEIGHT_MA"}
+analysis_id=${1:-"HEIGHT_MA"}
 
-for dataset in data/harmonized_data/"$analyis_id"/*/train_data.pkl
+for dataset in data/harmonized_data/"$analysis_id"/*/train_data.pkl
 do
-  python3 model/train_models.py --dataset-path "$dataset"
+  extra_flag=""
+
+  if [[ "$analysis_id" == *_MT ]]; then
+    extra_flag="--add-prs-to-gate"
+  fi
+
+  python3 model/train_models.py \
+    --dataset-path "$dataset" \
+    --skip-moe-pytorch \
+    $extra_flag
 done

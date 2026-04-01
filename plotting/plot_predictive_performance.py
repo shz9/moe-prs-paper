@@ -27,6 +27,7 @@ def postprocess_metrics_df(
         "Training dataset",
         "Training cohort",
         "Test biobank",
+        "AnalysisID",
         "Phenotype",
         "EvalCategory",
         "Evaluation Group",
@@ -43,7 +44,10 @@ def postprocess_metrics_df(
     sub_metrics_df = sub_metrics_df.loc[
         sub_metrics_df.EvalCategory.isin([category, "All"])
     ]
+    # Remove entries with tiny sample sizes:
     sub_metrics_df = sub_metrics_df.loc[sub_metrics_df.N >= min_sample_size]
+    # Remove entries with NaNs:
+    sub_metrics_df = sub_metrics_df.loc[~sub_metrics_df[metric].isna()]
 
     if "SinglePRS+Covariates" in sub_metrics_df["Model Category"].unique():
         single_model_label = "SinglePRS+Covariates"

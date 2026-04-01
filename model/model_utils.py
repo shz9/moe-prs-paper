@@ -282,7 +282,9 @@ class TorchMoEWrapper:
 @lru_cache(maxsize=None)
 def get_analysis_tables():
     tabs = {}
-    for f in glob.glob(osp.dirname(osp.dirname(__file__)), "*_prs_table.csv"):
+    for f in glob.glob(
+        osp.join(osp.dirname(osp.dirname(__file__)), "tables/*_prs_table.csv")
+    ):
         tabs[osp.basename(f)] = pd.read_csv(f)
 
     return tabs
@@ -310,7 +312,7 @@ def get_analysis_id_mapper(target_col):
     tabs = get_analysis_tables()
 
     combined_df = pd.concat(
-        [df[["AnalysisID", target_col]].unique() for df in tabs.values()]
+        [df[["AnalysisID", target_col]].drop_duplicates() for df in tabs.values()]
     )
 
     return dict(zip(combined_df["AnalysisID"], combined_df[target_col]))

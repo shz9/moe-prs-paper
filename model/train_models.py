@@ -9,7 +9,7 @@ from magenpy.utils.system_utils import makedir
 sys.path.append(osp.dirname(osp.dirname(__file__)))
 sys.path.append(osp.dirname(osp.dirname(osp.dirname(__file__))))
 
-from baseline_models import AncestryWeightedPRS, MultiPRS
+from baseline_models import AncestryWeightedPRS, AttributePartitionedPRS, MultiPRS
 from grid_search import custom_cv_grid_search, get_gate_penalty_ladder
 from model_utils import Timer, get_model_name_mapper
 from moe import MoEPRS
@@ -47,35 +47,64 @@ def train_baseline_linear_models(
     # -------------------------------------------------
     # Determine if we should run the AncestryWeightedPRS model:
 
-    # First, map the model names to their corresponding training cohort:
-    MODEL_NAME_MAP = get_model_name_mapper()
-    model_names = {m: MODEL_NAME_MAP[analysis_id][m] for m in dataset.prs_cols}
+    if dataset.analysis_id.endswith("_MA"):
+        # First, map the model names to their corresponding training cohort:
+        MODEL_NAME_MAP = get_model_name_mapper()
+        model_names = {m: MODEL_NAME_MAP[analysis_id][m] for m in dataset.prs_cols}
 
-    # If we have at least two models whose names overlaps with
-    # ancestry labels in the dataset, then run the AncestryWeightedPRS model:
-    if (
-        len(
-            set(model_names.values()).intersection(
-                set(dataset.data["Ancestry"].unique())
+        # If we have at least two models whose names overlaps with
+        # ancestry labels in the dataset, then run the AncestryWeightedPRS model:
+        if (
+            len(
+                set(model_names.values()).intersection(
+                    set(dataset.data["Ancestry"].unique())
+                )
             )
-        )
-        >= 2
-    ):
-        base_models["AncestryWeightedPRS"] = AncestryWeightedPRS(
+            >= 2
+        ):
+            base_models["AncestryWeightedPRS"] = AncestryWeightedPRS(
+                prs_dataset=dataset,
+                expert_cols=dataset.prs_cols,
+                covariates_cols=dataset.covariates_cols,
+                add_intercept=add_intercept,
+                class_weights=class_weights,
+                penalty_type=penalty_type,
+                penalty=penalty,
+                expert_ancestry_map=model_names,
+            )
+
+            with Timer() as timer:
+                base_models["AncestryWeightedPRS"].fit()
+
+            runtimes["AncestryWeightedPRS"] = timer.minutes
+
+    # -------------------------------------------------
+    # Determine if we should run the sex-matched PRS model:
+
+    if dataset.analysis_id.endswith("_SEX"):
+        attribute_to_score_map = {}
+
+        for pid in dataset.prs_cols:
+            if pid.endswith("_F"):
+                attribute_to_score_map[0.0] = pid
+            elif pid.endswith("_M"):
+                attribute_to_score_map[1.0] = pid
+
+        base_models["SexMatchedPRS"] = AttributePartitionedPRS(
             prs_dataset=dataset,
-            expert_cols=dataset.prs_cols,
+            partition_attribute="Sex",
+            attribute_to_score_map=attribute_to_score_map,
             covariates_cols=dataset.covariates_cols,
             add_intercept=add_intercept,
             class_weights=class_weights,
             penalty_type=penalty_type,
             penalty=penalty,
-            expert_ancestry_map=model_names,
         )
 
         with Timer() as timer:
-            base_models["AncestryWeightedPRS"].fit()
+            base_models["SexMatchedPRS"].fit()
 
-        runtimes["AncestryWeightedPRS"] = timer.minutes
+        runtimes["SexMatchedPRS"] = timer.minutes
 
     # -------------------------------------------------
     # First the base models with covariates:
@@ -124,11 +153,15 @@ def train_moe_model_numpy(dataset):
         global_covariates_cols=dataset.covariates_cols,
     )
 
+    print("------------------------------------")
+    print("> Training standard MoE model...")
     with Timer() as timer:
         moe.fit()
 
     moe_models["MoE"] = moe
     runtimes["MoE"] = timer.minutes
+
+    print("------------------------------------")
 
     # -----------------------------------------
     # Fit MoEPRS model covariate-free gating (e.g. MultiPRS)
@@ -139,14 +172,22 @@ def train_moe_model_numpy(dataset):
         global_covariates_cols=dataset.covariates_cols,
     )
 
+    print("------------------------------------")
+    print("> Training MoE model no input covariates to the gate...")
+
     with Timer() as timer:
         moe_cfg.fit()
 
     moe_models["MoE-CFG"] = moe_cfg
     runtimes["MoE-CFG"] = timer.minutes
 
+    print("------------------------------------")
+
     # -----------------------------------------
     # Fit the MoEPRS model using grid search:
+
+    print("------------------------------------")
+    print("> Training MoE model with grid search...")
 
     partial_moe = partial(
         MoEPRS,
@@ -166,10 +207,15 @@ def train_moe_model_numpy(dataset):
 
     runtimes["MoE-GS"] = timer.minutes
 
+    print("------------------------------------")
+
     # -----------------------------------------
     # Run MoEPRS with fixed residuals:
 
     if dataset.phenotype_likelihood != "binomial":
+        print("------------------------------------")
+        print("> Training MoE model with fixed residuals...")
+
         moe_fix_resid = MoEPRS(
             prs_dataset=dataset,
             expert_cols=dataset.prs_cols,
@@ -183,6 +229,7 @@ def train_moe_model_numpy(dataset):
 
         runtimes["MoE-fixed-resid"] = timer.minutes
         moe_models["MoE-fixed-resid"] = moe_fix_resid
+        print("------------------------------------")
 
     return moe_models, runtimes
 
@@ -431,7 +478,7 @@ if __name__ == "__main__":
         "harmonized_data", "trained_models"
     )
 
-    analysis_id = args.dataset_path.split("harmonized_data/").split("/")[0]
+    analysis_id = args.dataset_path.split("/")[2]
     dataset_name = osp.basename(args.dataset_path).replace(".pkl", "")
     output_dir = osp.join(output_dir, dataset_name)
 

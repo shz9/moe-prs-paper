@@ -7,7 +7,7 @@
 #SBATCH --mail-user=shadi.zabad@mail.mcgill.ca
 #SBATCH --mail-type=FAIL
 
-phenotype=${1:-"HEIGHT"}
+phenotype=${1:-"HEIGHT_MA"}
 
 echo "Job started at: `date`"
 

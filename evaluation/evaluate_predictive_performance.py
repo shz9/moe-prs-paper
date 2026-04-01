@@ -95,14 +95,18 @@ def stratified_evaluation(
         print("> Evaluation group:", mg)
         for m, msk in msk_group.items():
             print("\t> Subgroup:", m)
-            edf = evaluate_prs_models(
-                prs_dataset,
-                other_models=preds,
-                mask=msk,
-                min_group_size=min_group_size,
-                metrics=metrics,
-                evaluate_base_models=evaluate_base_models,
-            )
+
+            try:
+                edf = evaluate_prs_models(
+                    prs_dataset,
+                    other_models=preds,
+                    mask=msk,
+                    min_group_size=min_group_size,
+                    metrics=metrics,
+                    evaluate_base_models=evaluate_base_models,
+                )
+            except Exception as e:
+                continue
 
             if edf is None:
                 continue
@@ -164,6 +168,19 @@ def evaluate_prs_models(
             )
 
     # --------------------------------------------------------------------------
+    # Extract the phenotype:
+
+    phenotype = prs_dataset.get_phenotype().flatten()[mask]
+
+    # Sanity checks on the phenotype:
+    if np.var(phenotype) == 0.0:
+        raise ValueError("No phenotypic variance in this group of individuals!")
+
+    if prs_dataset.phenotype_likelihood == "binomial":
+        if phenotype.sum() < 10:
+            raise ValueError("Too few cases to compute metrics reliably.")
+
+    # --------------------------------------------------------------------------
     # Extract the polygenic scores to evaluate:
     if evaluate_base_models:
         prs_df = pd.DataFrame(
@@ -179,11 +196,6 @@ def evaluate_prs_models(
 
     if prs_df is None:
         raise ValueError("No models to evaluate!")
-
-    # --------------------------------------------------------------------------
-    # Extract the phenotype:
-
-    phenotype = prs_dataset.get_phenotype().flatten()[mask]
 
     # --------------------------------------------------------------------------
     # Extract the covariates (if the metric requires them):

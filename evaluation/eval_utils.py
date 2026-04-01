@@ -1,6 +1,3 @@
-import os.path as osp
-import sys
-
 import numpy as np
 import pandas as pd
 from viprs.eval.eval_utils import fit_linear_model

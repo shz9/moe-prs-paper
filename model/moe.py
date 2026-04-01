@@ -275,14 +275,10 @@ class MoEPRS(object):
 
         if init_history:
             self.history = {
-                "NCLL": [],
-                "Weighted Loss": [],
-                "Ensemble Loss": [],
-                "Expert Losses": [],
-                "Weighted NLL": [],
-                "Gate Loss": [],
-                "Model Weights": [],
-                "model_params": [],
+                "expected_ncll": [],
+                "nelbo": [],
+                "objective": [],
+                "ensemble_loss": [],
             }
 
         if param_0 is not None and "gate_params" in param_0:
@@ -402,12 +398,6 @@ class MoEPRS(object):
     def expert_responsibility(self):
         return self._resp
 
-    def weighted_loss(self, axis=None):
-        return (1.0 / self.N) * (np.exp(self.log_w) * self._expert_loss).sum(axis=axis)
-
-    def weighted_nll(self, axis=None):
-        return (-1.0 / self.N) * (self.expert_responsibility * self.ll()).sum(axis=axis)
-
     def _weighted_nll_grad(self):
         """
         Compute the gradient of the current loss w.r.t. global and expert-specific parameters.
@@ -444,8 +434,9 @@ class MoEPRS(object):
             )
 
         elif self.loss == "bce":
-            deltas = y_hat - y  # y_hat already passed through expit
-
+            w1 = self.class_weights[1]
+            w0 = self.class_weights[0]
+            deltas = w1 * y * (y_hat - 1.0) + w0 * (1.0 - y) * y_hat
         else:
             raise ValueError(f"Unsupported loss: {self.loss}")
 
@@ -478,6 +469,9 @@ class MoEPRS(object):
                 grads.append(grad_k)
 
         return (1.0 / self.N) * np.concatenate(grads)
+
+    def weighted_nll(self, axis=None):
+        return (-1.0 / self.N) * (self.expert_responsibility * self.ll()).sum(axis=axis)
 
     def gate_loss(self, axis=None):
         """
@@ -512,15 +506,52 @@ class MoEPRS(object):
         """
         The optimization objective
         """
-        return self.complete_nll()
+        return self.observed_ncll()
 
-    def complete_nll(self):
+    def nelbo(self):
         """
-        The complete-data negative log-likelihood
+        The negative ELBO objective
+        """
+        nelbo = -(1.0 / self.N) * np.sum(
+            self.expert_responsibility * (self.log_w + self.ll() - self.log_resp)
+        )
+
+        nelbo += self.penalty()
+
+        return nelbo
+
+    def expected_ncll(self):
+        """
+        The expected complete-data negative log-likelihood
         """
 
-        expert_resp = self.expert_responsibility
-        w_loss = -(1.0 / self.N) * np.sum(expert_resp * (self.log_w + self.ll()))
+        w_loss = -(1.0 / self.N) * np.sum(
+            self.expert_responsibility * (self.log_w + self.ll())
+        )
+
+        # Add the contributions of the penalty term:
+        w_loss += self.penalty()
+
+        return w_loss
+
+    def observed_ncll(self):
+        """
+        The observed complete-data negative log-likelihood
+        """
+
+        nll = -(1.0 / self.N) * logsumexp(self.log_w + self.ll(), axis=1).sum()
+
+        # Add the contributions of the penalty term:
+        nll += self.penalty()
+
+        return nll
+
+    def penalty(self):
+        """
+        Compute the contribution of penalties on the gating or expert parameters.
+        """
+
+        penalty_term = 0.0
 
         if self.gate_penalty > 0.0:
             # Add penalty term for the gating model:
@@ -528,14 +559,14 @@ class MoEPRS(object):
                 g_params = self.gate_params[1:, :]
             else:
                 g_params = self.gate_params
-            w_loss += self.gate_penalty * (g_params**2).sum()
+            penalty_term += self.gate_penalty * (g_params**2).sum()
 
         if self.expert_params is not None and self.expert_penalty > 0.0:
             # Add penalty term for the experts:
             # np.dot(expert_resp.sum(axis=0), (self.expert_params ** 2).sum(axis=1))
-            w_loss += self.expert_penalty * (self.expert_params**2).sum()
+            penalty_term += self.expert_penalty * (self.expert_params**2).sum()
 
-        return w_loss
+        return penalty_term
 
     def ll(self, axis=None):
         """
@@ -921,12 +952,12 @@ class MoEPRS(object):
 
         # Extrapolated parameter proposal
         theta_prop = theta0 - 2.0 * alpha * r + alpha**2 * v
-        obj_theta2 = self.complete_nll()  # objective at theta2 (current state)
+        obj_theta2 = self.objective()  # objective at theta2 (current state)
 
         self._unpack_all_params(theta_prop)
         self.e_step()  # one E-step to sync responsibilities to the new params
 
-        if self.complete_nll() > obj_theta2:
+        if self.objective() > obj_theta2:
             # Extrapolation made things worse — revert to theta2
             self._unpack_all_params(theta2)
             self.e_step()
@@ -939,19 +970,10 @@ class MoEPRS(object):
         n_restarts=1,
         param_0=None,
         patience=10,
-        atol=1e-5,
-        objective="ncll",
+        x_atol=1e-4,
+        f_atol=1e-5,
         verbose=True,
     ):
-        objective = objective.lower()
-
-        if objective == "ncll":
-            objective = "NCLL"
-        elif objective == "ensemble_loss":
-            objective = "Ensemble Loss"
-        else:
-            raise ValueError("Objective must be one of 'ncll' or 'ensemble_loss'")
-
         pbar = tqdm(range(n_restarts * n_iter), disable=not verbose)
 
         restart = True
@@ -980,39 +1002,32 @@ class MoEPRS(object):
                 self.e_step()
                 self.m_step()
 
-            self.history["NCLL"].append(self.complete_nll())
-            self.history["model_params"].append(self._pack_all_params())
-            self.history["Ensemble Loss"].append(self.ensemble_loss())
-
-            # self.history["Weighted Loss"].append(self.weighted_loss())
-            # self.history["Weighted NLL"].append(self.weighted_nll())
-            # self.history["Gate Loss"].append(self.gate_loss())
-            # self.history["Expert Losses"].append(self._expert_loss.mean(axis=0))
-            # self.history["Model Weights"].append(
-            #    self.expert_responsibility.mean(axis=0)
-            # )
+            self.history["expected_ncll"].append(self.expected_ncll())
+            self.history["nelbo"].append(self.nelbo())
+            self.history["objective"].append(self.objective())
+            self.history["ensemble_loss"].append(self.ensemble_loss())
 
             if curr_iter > 0:
-                if np.allclose(
-                    self.history[objective][-1],
-                    self.history[objective][-2],
-                    atol=atol,
+                f_close = np.allclose(
+                    self.history["objective"][-1],
+                    self.history["objective"][-2],
+                    atol=f_atol,
                     rtol=0.0,
-                ):
+                )
+
+                x_close = self.param_tracker.all_close(
+                    self.get_model_parameters(), atol=x_atol
+                )
+
+                if f_close and x_close:
                     if verbose:
                         print(f"Objective converged at iteration {curr_iter}")
-                    restart = True
-                elif self.param_tracker.all_close(
-                    self.get_model_parameters(), atol=atol
-                ):
-                    if verbose:
-                        print(f"Parameters converged at iteration {curr_iter}")
                     restart = True
                 elif patience_r < 1:
                     if verbose:
                         print("Model is no longer improving; Breaking...")
                     restart = True
-                elif self.history["NCLL"][-1] > self.history["NCLL"][-2]:
+                elif self.history["objective"][-1] > self.history["objective"][-2]:
                     patience_r -= 1
                     if self.switch_optimizer and self.optimizer == "lstsq":
                         if verbose:
@@ -1023,12 +1038,12 @@ class MoEPRS(object):
 
             curr_iter += 1
             self.param_tracker.add(
-                self.get_model_parameters(), self.history[objective][-1]
+                self.get_model_parameters(), self.history["objective"][-1]
             )
             pbar.set_postfix(
                 {
-                    "NCLL": self.history["NCLL"][-1],
-                    "Loss": self.history["Ensemble Loss"][-1],
+                    "Objective": self.history["objective"][-1],
+                    "NELBO": self.history["nelbo"][-1],
                     "Restarts remaining": n_restarts,
                 }
             )
@@ -1041,6 +1056,8 @@ class MoEPRS(object):
             self.log_resid = (
                 self.param_tracker.best_params["log_resid"].copy().flatten()
             )
+        if self.global_params is not None:
+            self.global_params = self.param_tracker.best_params["global_params"].copy()
 
         return self
 
@@ -1084,7 +1101,7 @@ class MoEPRS(object):
                     index=[[], ["Intercept"]][not self.expert_add_intercept]
                     + self.global_covariates_cols,
                 )
-
+            else:
                 params["global_params"] = self.global_params
 
         if self.log_resid is not None:

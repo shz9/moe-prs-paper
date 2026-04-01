@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from clustering import cluster_covariates
+from clustering import cluster_data
 from joblib import Parallel, delayed
 from sklearn.model_selection import (
     KFold,
@@ -21,6 +21,42 @@ sys.path.append(parent_dir)
 sys.path.append(osp.join(parent_dir, "evaluation/"))
 
 from evaluate_predictive_performance import stratified_evaluation
+
+
+def combine_cluster_label_with_binary_phenotype(
+    cluster_label,
+    binary_phenotype,
+    threshold=1e-3,
+    min_cases=10,
+):
+    """
+    This helper function takes as input a vector with cluster label as well as a vector
+    capturing a binary phenotype and aims to merge them so that we have a cluster-disease status
+    groupings. This will help with stratified splits when we're trying to capture information
+    about both clusters as well as disease status.
+    """
+
+    df = pd.DataFrame({"Cluster": cluster_label, "Phenotype": binary_phenotype})
+
+    g_df = df.groupby("Cluster")["Phenotype"].agg(["mean", "sum", "size"]).reset_index()
+
+    valid_cluster = g_df.loc[
+        (threshold <= g_df["mean"])
+        & (g_df["mean"] <= 1.0 - threshold)
+        & (min_cases <= g_df["sum"])
+        & (g_df["sum"] <= g_df["size"] - min_cases),
+        ["Cluster"],
+    ]
+
+    merged_df = df.merge(valid_cluster, how="left", indicator=True)
+
+    df["New Cluster"] = np.where(
+        merged_df["_merge"] == "left_only",
+        merged_df["Cluster"],
+        merged_df["Cluster"].astype(str) + merged_df["Phenotype"].astype(str),
+    )
+
+    return pd.Categorical(df["New Cluster"]).codes
 
 
 def _stratified_sample_and_split(
@@ -61,10 +97,9 @@ def _stratified_sample_and_split(
         if cluster_labels is None:
             cluster_labels = dataset.get_phenotype().flatten()
         else:
-            cluster_labels = (
-                pd.Series(cluster_labels).astype(str)
-                + pd.Series(dataset.get_phenotype().flatten()).astype(str)
-            ).values
+            cluster_labels = combine_cluster_label_with_binary_phenotype(
+                cluster_labels, dataset.get_phenotype().flatten()
+            )
 
     # --------------------------------------------------------
     # If requested max_size >= N, just use all indices and perform StratifiedKFold on entire dataset (if possible)
@@ -74,8 +109,8 @@ def _stratified_sample_and_split(
     else:
         # Use StratifiedShuffleSplit to sample `total_used` indices with preserved label proportions
         train_size = float(max_size) / N  # StratifiedShuffleSplit uses train_size param
-
-        if cluster_labels is not None:
+        if cluster_labels is not None and train_size < 0.8:
+            # For binary phenotypes, incorporate case-control status along with cluster label:
             sss = StratifiedShuffleSplit(
                 n_splits=1,
                 train_size=train_size,
@@ -344,12 +379,17 @@ def custom_cv_grid_search(
     total_used = per_fold_target * n_splits
 
     # create stratified folds using sklearn utilities
+    gate_input = getattr(baseline_model, "gate_input_cols", None)
+    if gate_input is not None:
+        gate_input += [dataset.phenotype_col]
+    cluster_fn = partial(cluster_data, data_columns=gate_input, n_jobs=n_jobs)
+
     folds = _stratified_sample_and_split(
         dataset,
         n_splits=n_splits,
         max_size=total_used,
         rng=rng,
-        cluster_fn=cluster_covariates,
+        cluster_fn=cluster_fn,
     )
 
     # build parameter grid

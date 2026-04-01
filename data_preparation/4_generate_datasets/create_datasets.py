@@ -12,7 +12,7 @@ from model.PRSDataset import PRSDataset
 
 
 def create_prs_dataset(
-    biobank, phenotype, pcs_source, ancestry_source, ancestry_subset=None
+    biobank, analysis_id, phenotype, pcs_source, ancestry_source, ancestry_subset=None
 ):
     # Read the phenotype file for individuals in this biobank:
     pheno_df = pd.read_csv(
@@ -26,7 +26,7 @@ def create_prs_dataset(
     print("> Number of samples with valid measurements:", len(pheno_df))
 
     # Read the csv file containing the PRS scores for this phenotype and biobank:
-    score_df = pd.read_csv(f"data/scores/{phenotype}/{biobank}.csv.gz", sep="\t")
+    score_df = pd.read_csv(f"data/scores/{analysis_id}/{biobank}.csv.gz", sep="\t")
 
     prs_cols = [col for col in score_df.columns if col not in ("FID", "IID")]
 
@@ -109,6 +109,7 @@ def create_prs_dataset(
     print(score_df[phenotype].describe())
 
     return PRSDataset(
+        analysis_id,
         score_df,
         phenotype,
         meta_cols=["FID", "IID", "UMAP_Cluster"] + ancestry_cols,
@@ -164,13 +165,6 @@ if __name__ == "__main__":
         help="The source of the ancestry assignments.",
     )
     parser.add_argument(
-        "--data-suffix",
-        dest="data_suffix",
-        type=str,
-        default="",
-        help='The suffix to append to the processed data files (default: "").',
-    )
-    parser.add_argument(
         "--prop-test",
         dest="prop_test",
         type=float,
@@ -195,7 +189,11 @@ if __name__ == "__main__":
     )
 
     prs_dataset = create_prs_dataset(
-        args.biobank, args.phenotype, args.pcs_source, args.ancestry_source
+        args.biobank,
+        args.analysis_id,
+        args.phenotype,
+        args.pcs_source,
+        args.ancestry_source,
     )
 
     print(
@@ -205,15 +203,15 @@ if __name__ == "__main__":
 
     # Save the entire dataset:
     prs_dataset.save(
-        f"data/harmonized_data/{args.analysis_id}/{args.biobank}/full_data{args.data_suffix}.pkl"
+        f"data/harmonized_data/{args.analysis_id}/{args.biobank}/full_data.pkl"
     )
 
     # Split the dataset into training and testing sets:
     train_data, test_data = prs_dataset.train_test_split(test_size=args.prop_test)
 
     train_data.save(
-        f"data/harmonized_data/{args.analysis_id}/{args.biobank}/train_data{args.data_suffix}.pkl"
+        f"data/harmonized_data/{args.analysis_id}/{args.biobank}/train_data.pkl"
     )
     test_data.save(
-        f"data/harmonized_data/{args.analysis_id}/{args.biobank}/test_data{args.data_suffix}.pkl"
+        f"data/harmonized_data/{args.analysis_id}/{args.biobank}/test_data.pkl"
     )

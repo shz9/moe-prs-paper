@@ -1,10 +1,11 @@
-import torch
-from torch.utils.data import Dataset
-from sklearn.preprocessing import StandardScaler
-import numpy as np
-import pandas as pd
 import copy
 import pickle
+
+import numpy as np
+import pandas as pd
+import torch
+from sklearn.preprocessing import StandardScaler
+from torch.utils.data import Dataset
 
 
 class PRSDataset(Dataset):
@@ -12,16 +13,18 @@ class PRSDataset(Dataset):
     A PyTorch Dataset class for handling PRS and phenotype data.
     """
 
-    def __init__(self,
-                 dataframe,
-                 phenotype_col,
-                 meta_cols=None,
-                 prs_cols=None,
-                 covariates_cols=None,
-                 group_getitem_cols=None,
-                 phenotype_likelihood='infer',
-                 backend='numpy'):
-
+    def __init__(
+        self,
+        analysis_id,
+        dataframe,
+        phenotype_col,
+        meta_cols=None,
+        prs_cols=None,
+        covariates_cols=None,
+        group_getitem_cols=None,
+        phenotype_likelihood="infer",
+        backend="numpy",
+    ):
         """
         :param dataframe: A pandas DataFrame containing the PRS, covariates, and phenotype data.
         :param phenotype_col: The name of the column containing the phenotype data.
@@ -38,12 +41,14 @@ class PRSDataset(Dataset):
 
         """
 
-        assert backend in ('torch', 'numpy')
-        assert phenotype_likelihood in ('infer', 'gaussian', 'binomial')
+        assert backend in ("torch", "numpy")
+        assert phenotype_likelihood in ("infer", "gaussian", "binomial")
 
         if group_getitem_cols is not None and dataframe is not None:
             for cols in group_getitem_cols.values():
                 assert all([c in dataframe.columns for c in cols])
+
+        self._analysis_id = analysis_id
 
         self.backend = None
         self.set_backend(backend)
@@ -88,11 +93,11 @@ class PRSDataset(Dataset):
         if self.covariates_cols is not None:
             self.covariates_cols = sorted(self.covariates_cols)
 
-        if phenotype_likelihood == 'infer':
+        if phenotype_likelihood == "infer":
             if len(np.unique(self.data[phenotype_col].values)) == 2:
-                self.phenotype_likelihood = 'binomial'
+                self.phenotype_likelihood = "binomial"
             else:
-                self.phenotype_likelihood = 'gaussian'
+                self.phenotype_likelihood = "gaussian"
         else:
             self.phenotype_likelihood = phenotype_likelihood
 
@@ -115,11 +120,11 @@ class PRSDataset(Dataset):
         self._cache_group_getitem_col_idx = None
 
     @classmethod
-    def from_pickle(cls, f, backend='numpy'):
+    def from_pickle(cls, f, backend="numpy"):
         """
         Load a PRSDataset object from a pickle file.
         """
-        with open(f, 'rb') as dat_f:
+        with open(f, "rb") as dat_f:
             obj = pickle.load(dat_f)
 
         if backend is not None:
@@ -164,11 +169,14 @@ class PRSDataset(Dataset):
         """
         return self.covariates_cols
 
+    @property
+    def analysis_id(self):
+        return self._analysis_id
+
     def cache_data_matrix(self):
         """
         Cache ONLY the columns needed by group_getitem_cols as float32.
         """
-        import pandas as pd
 
         assert self.group_getitem_cols is not None, "Call set_group_getitem_cols first."
 
@@ -184,7 +192,9 @@ class PRSDataset(Dataset):
         # sanity: all used columns must be numeric (for now atleast)
         bad = [c for c in used if not pd.api.types.is_numeric_dtype(self.data[c])]
         if bad:
-            raise ValueError(f"Non-numeric columns are used by group_getitem_cols: {bad}")
+            raise ValueError(
+                f"Non-numeric columns are used by group_getitem_cols: {bad}"
+            )
 
         self._cache_cols = used
         X = self.data[self._cache_cols].to_numpy(dtype=np.float32, copy=True)
@@ -222,7 +232,6 @@ class PRSDataset(Dataset):
             return {k: Xb[:, v] for k, v in self._cache_group_getitem_col_idx.items()}
 
     def get_data_cols(self, exclude_meta=True):
-
         # Extract and keep the relevant data columns:
         data_cols = []
 
@@ -243,25 +252,35 @@ class PRSDataset(Dataset):
         Get a list of columns in data that have continuous values
         """
 
-        return np.array([c for c in self.get_data_cols(exclude_meta=True)
-                  if len(np.unique(self.data[c].values)) > 2])
+        return np.array(
+            [
+                c
+                for c in self.get_data_cols(exclude_meta=True)
+                if len(np.unique(self.data[c].values)) > 2
+            ]
+        )
 
     @property
     def binary_cols(self):
         """
         Get a list of columns in data that have binary values
         """
-        np.array([c for c in self.get_data_cols(exclude_meta=True)
-                  if c not in self.continuous_cols])
+        np.array(
+            [
+                c
+                for c in self.get_data_cols(exclude_meta=True)
+                if c not in self.continuous_cols
+            ]
+        )
 
     def set_backend(self, new_backend):
         """
         Set the backend for the data (i.e. Torch Tensor or numpy arrays).
         """
 
-        if new_backend == 'numpy':
+        if new_backend == "numpy":
             self.backend = np.array
-        elif new_backend == 'torch':
+        elif new_backend == "torch":
             self.backend = torch.Tensor
         else:
             raise NotImplementedError(f"Backend {new_backend} not recognized!")
@@ -274,11 +293,12 @@ class PRSDataset(Dataset):
         """
 
         # TESTING:
-        std_cols = list(self.covariates_cols) + [self.phenotype_col] + list(self.prs_cols)
+        std_cols = (
+            list(self.covariates_cols) + [self.phenotype_col] + list(self.prs_cols)
+        )
         std_cols = [c for c in std_cols if c in self.continuous_cols]
 
         if scaler is None:
-
             assert self.scaler is not None
 
             if refit or not hasattr(self.scaler, "n_features_in_"):
@@ -286,11 +306,11 @@ class PRSDataset(Dataset):
             else:
                 return
         else:
-
             # Sanity checks:
             if hasattr(scaler, "feature_names_in_"):
-                assert np.array_equal(scaler.feature_names_in_, std_cols), \
+                assert np.array_equal(scaler.feature_names_in_, std_cols), (
                     f"Feature names do not match! (1) {scaler.feature_names_in_} (2) {std_cols}"
+                )
             elif hasattr(scaler, "n_features_in_"):
                 assert scaler.n_features_in_ == len(std_cols)
 
@@ -311,7 +331,9 @@ class PRSDataset(Dataset):
         assert self.scaler is not None
 
         # TESTING:
-        std_cols = list(self.covariates_cols) + [self.phenotype_col] + list(self.prs_cols)
+        std_cols = (
+            list(self.covariates_cols) + [self.phenotype_col] + list(self.prs_cols)
+        )
         std_cols = [c for c in std_cols if c in self.continuous_cols]
 
         if self.scaled_data:
@@ -324,12 +346,13 @@ class PRSDataset(Dataset):
         """
 
         assert self.covariates_cols is not None
-        assert self.phenotype_likelihood == 'gaussian'
+        assert self.phenotype_likelihood == "gaussian"
 
         from magenpy.stats.transforms.phenotype import adjust_for_covariates
 
-        self.data[self.phenotype_col] = adjust_for_covariates(self.data[self.phenotype_col],
-                                                              self.get_covariates())
+        self.data[self.phenotype_col] = adjust_for_covariates(
+            self.data[self.phenotype_col], self.get_covariates()
+        )
 
     def adjust_prs_for_covariates(self):
         """
@@ -341,8 +364,9 @@ class PRSDataset(Dataset):
         from magenpy.stats.transforms.phenotype import adjust_for_covariates
 
         for prs_col in self.prs_cols:
-            self.data[prs_col] = adjust_for_covariates(self.data[prs_col],
-                                                       self.get_covariates())
+            self.data[prs_col] = adjust_for_covariates(
+                self.data[prs_col], self.get_covariates()
+            )
 
     def filter_outliers(self):
         """
@@ -362,32 +386,51 @@ class PRSDataset(Dataset):
         self.filter_samples(np.where(~outliers)[0])
 
     def filter_samples(self, keep_idx):
-
         if keep_idx.dtype == bool:
             self.data = self.data.loc[keep_idx, :]
         else:
             self.data = self.data.iloc[keep_idx, :]
 
-    def train_test_split(self, test_size):
+    def drop_prs(self, prs_ids):
+        """
+        Drop certain polygenic scores from the dataset
+        """
 
+        if isinstance(prs_ids, str):
+            prs_ids = [prs_ids]
+
+        for pid in prs_ids:
+            if pid not in self.prs_cols:
+                raise KeyError(f"The PRS ID {pid} is not present in this dataset!")
+
+        self.prs_cols = [pid for pid in self.prs_cols if pid not in prs_ids]
+        self.data.drop(columns=prs_ids, inplace=True)
+
+    def train_test_split(self, test_size, inplace=False):
         assert 0 < test_size < self.N
 
         from sklearn.model_selection import train_test_split
 
-        if self.phenotype_likelihood == 'binomial':
+        if self.phenotype_likelihood == "binomial":
             stratify = self.get_phenotype()
         else:
             stratify = None
 
-        train_idx, test_idx = train_test_split(np.arange(self.N),
-                                               test_size=test_size,
-                                               stratify=stratify)
+        train_idx, test_idx = train_test_split(
+            np.arange(self.N), test_size=test_size, stratify=stratify
+        )
 
         test_dataset = copy.deepcopy(self)
         test_dataset.filter_samples(test_idx)
-        self.filter_samples(train_idx)
 
-        return self, test_dataset
+        if inplace:
+            train_dataset = self
+        else:
+            train_dataset = copy.deepcopy(self)
+
+        train_dataset.filter_samples(train_idx)
+
+        return train_dataset, test_dataset
 
     def get_prs_predictions(self, scaler=None):
         """
@@ -457,7 +500,7 @@ class PRSDataset(Dataset):
             data = np.hstack([np.ones((data.shape[0], 1)), data])
 
         return self.backend(data)
-    
+
     def get_ancestry(self, ancestry_col: str = "Ancestry"):
         """
         Return the ancestry labels as a 1D numpy array.
@@ -470,7 +513,6 @@ class PRSDataset(Dataset):
             f"{list(self.data.columns)}"
         )
         return self.data[ancestry_col].values
-
 
     def concatenate(self, prs_dataset):
         """
@@ -502,7 +544,7 @@ class PRSDataset(Dataset):
             meta_cols=self.meta_cols,
             prs_cols=self.prs_cols,
             covariates_cols=self.covariates_cols,
-            phenotype_likelihood=self.phenotype_likelihood
+            phenotype_likelihood=self.phenotype_likelihood,
         )
 
     def set_group_getitem_cols(self, group_getitem_cols):
@@ -511,8 +553,10 @@ class PRSDataset(Dataset):
         """
         self.group_getitem_cols = group_getitem_cols
         if self.group_getitem_cols is not None:
-            self.group_getitem_col_idx = {k: [list(self.data.columns).index(c) for c in v]
-                                          for k, v in group_getitem_cols.items()}
+            self.group_getitem_col_idx = {
+                k: [list(self.data.columns).index(c) for c in v]
+                for k, v in group_getitem_cols.items()
+            }
 
     def __len__(self):
         return len(self.data)
@@ -522,12 +566,16 @@ class PRSDataset(Dataset):
 
         # ---- Cached fast path (indexes into cached matrix) ----
         if self._data_matrix is not None:
-            assert self._cache_group_getitem_col_idx is not None, "Call cache_data_matrix() first."
+            assert self._cache_group_getitem_col_idx is not None, (
+                "Call cache_data_matrix() first."
+            )
             row = self._data_matrix[idx]  # row is over _cache_cols
             return {k: row[v] for k, v in self._cache_group_getitem_col_idx.items()}
 
         # ---- Non-cached path (indexes into full dataframe row) ----
-        row = self.data.iloc[idx, :].values  # this can be dtype=object if there are strings elsewhere
+        row = self.data.iloc[
+            idx, :
+        ].values  # this can be dtype=object if there are strings elsewhere
         out = {}
         for k, v in self.group_getitem_col_idx.items():
             # IMPORTANT: only cast the selected slice (v) to float32, NOT the whole row
@@ -535,6 +583,5 @@ class PRSDataset(Dataset):
         return out
 
     def save(self, f):
-
-        with open(f, 'wb') as opf:
+        with open(f, "wb") as opf:
             pickle.dump(self, opf)

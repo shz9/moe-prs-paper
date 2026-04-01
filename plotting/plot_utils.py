@@ -2,6 +2,7 @@ import os.path as osp
 import sys
 
 import pandas as pd
+import seaborn as sns
 
 parent_dir = osp.dirname(osp.dirname(osp.abspath(__file__)))
 sys.path.append(parent_dir)
@@ -29,6 +30,61 @@ BIOBANK_NAME_MAP_SHORT = {
     "ukbb": "UKB",
     "cartagene": "CaG",
 }
+
+# --------------------------------------------------------
+
+glasbey50 = [
+    "#0000FF",
+    "#FF0000",
+    "#00FF00",
+    "#000033",
+    "#FF00B6",
+    "#005300",
+    "#FFD300",
+    "#009FFF",
+    "#9A4D42",
+    "#00FFBE",
+    "#783FC1",
+    "#1F9698",
+    "#FFACFD",
+    "#B1CC71",
+    "#F1085C",
+    "#FE8F42",
+    "#DD00FF",
+    "#201A01",
+    "#720055",
+    "#766C95",
+    "#02AD24",
+    "#C8FF00",
+    "#886C00",
+    "#FFB79F",
+    "#858567",
+    "#A10300",
+    "#14F9FF",
+    "#00479E",
+    "#DC5E93",
+    "#93D4FF",
+    "#004C47",
+    "#D5FF00",
+    "#FF8AD8",
+    "#00B5F7",
+    "#FF7F00",
+    "#6A826C",
+    "#00FF6F",
+    "#8F7C00",
+    "#A57BB8",
+    "#5900FF",
+    "#009BFF",
+    "#FFB167",
+    "#00FF9C",
+    "#B0006F",
+    "#AAFF00",
+    "#005F39",
+    "#A77B00",
+    "#FF5C00",
+    "#4BFF00",
+    "#3B5DFF",
+]
 
 # --------------------------------------------------------
 # Sorting lists:
@@ -114,7 +170,6 @@ def assign_models_consistent_colors(models, palette="Set3"):
     :param palette: The color palette to use
     :return: A dictionary of model names and colors
     """
-    import seaborn as sns
 
     if isinstance(models, str):
         models = [models]
@@ -137,8 +192,12 @@ def assign_models_consistent_colors(models, palette="Set3"):
     colors["MoEPRS"] = "#375E97"
     colors["MultiPRS"] = "#FFBB00"
 
-    remaining_models = sorted(list(set(MODEL_NAME_MAP.values()) - set(colors.keys())))
-    remaining_colors = sns.color_palette(palette, len(remaining_models))
+    all_unique_models = set(
+        [v for inner in MODEL_NAME_MAP.values() for v in inner.values()]
+    )
+
+    remaining_models = sorted(list(all_unique_models - set(colors.keys())))
+    remaining_colors = glasbey50[: len(remaining_models)]
 
     colors.update(dict(zip(remaining_models, remaining_colors)))
 
@@ -168,91 +227,90 @@ def read_eval_metrics(file_path):
     analysis_id = file_path.split("/")[-3]
 
     eval_df["AnalysisID"] = analysis_id
+    eval_df["Phenotype"] = ANALYSIS_TO_PHENOTYPE_MAP[analysis_id]
     eval_df["Test biobank"] = file_path.split("/")[-2].upper()
 
     return eval_df
 
 
 def transform_eval_metrics(eval_df):
-    def map_model_name(x):
+    # ----------------------------------------------------------------------
+    # Extract details about the training cohort / PGS:
+    def process_pgs(x, analysis_id):
+        NEW_MAP = MODEL_NAME_MAP[analysis_id]
+
+        result = {
+            "Training biobank": None,
+            "Training dataset": None,
+            "Training cohort": None,
+            "Model Name": x,
+            "Model Category": None,
+        }
+
+        # Parse biobank and model key from "biobank/dataset:model" format
         try:
-            biobank, rest = x.split("/")
-            _, rest = rest.split(":")
-
-            if rest in (pd.Series(MODEL_NAME_MAP.keys()) + "-covariates").values:
-                m = rest.replace("-covariates", "")
+            split_slash = x.split("/")
+            if len(split_slash) > 1:
+                biobank = split_slash[0]
+                result["Training biobank"] = biobank.upper()
+                rest = split_slash[1]
             else:
-                m = rest
+                biobank = None
+                rest = x
 
-            try:
-                return MODEL_NAME_MAP[m] + f" ({biobank})"
-            except KeyError as e:
-                return m + f" ({biobank})"
-        except ValueError as e:
-            try:
-                return MODEL_NAME_MAP[x]
-            except Exception as e:
-                return x
-
-    def assign_training_cohort(x):
-        try:
-            biobank, rest = x.split("/")
-            _, rest = rest.split(":")
-
-            if rest in (pd.Series(MODEL_NAME_MAP.keys()) + "-covariates").values:
-                m = rest.replace("-covariates", "")
+            split_colon = rest.split(":")
+            if len(split_colon) > 1:
+                result["Training dataset"] = split_colon[0]
+                m_raw = split_colon[1]
             else:
-                m = rest
+                m_raw = rest
 
-            try:
-                return MODEL_NAME_MAP[m]
-            except KeyError as e:
-                return m
-        except ValueError as e:
-            return x
-
-    def map_dataset_name(x):
-        try:
-            split_x = x.split(":")
-            if len(split_x) > 1:
-                return split_x[0]
+            # Strip "-covariates" suffix to get the base model key
+            if m_raw in (pd.Series(NEW_MAP.keys()) + "-covariates").values:
+                m = m_raw.replace("-covariates", "")
             else:
-                return None
-        except Exception as e:
-            return x
+                m = m_raw
 
-    def assign_training_biobank(x):
-        try:
-            split_x = x.split("/")
-            if len(split_x) > 1:
-                return split_x[0].upper()
-            else:
-                return None
-        except Exception as e:
-            return x
+            # Resolve model name from map
+            mapped_name = NEW_MAP.get(m, m)
+            result["Training cohort"] = mapped_name
+            result["Model Name"] = mapped_name + (f" ({biobank})" if biobank else "")
 
-    def assign_model_category(x):
-        if "MoE" in x:
-            return "MoE"
-        elif "MultiPRS" in x:
-            return "MultiPRS"
-        elif "AncestryWeightedPRS" in x:
-            return "AncestryWeightedPRS"
-        elif "Covariates" in x:
-            return "Covariates"
-        elif "Random" in x:
-            return "Random"
+        except (ValueError, AttributeError):
+            result["Model Name"] = NEW_MAP.get(x, x)
+            result["Training cohort"] = NEW_MAP.get(x, x)
+
+        # Assign model category from the resolved model name
+        model_name = result["Model Name"]
+        if "MoE" in model_name:
+            result["Model Category"] = "MoE"
+        elif "MultiPRS" in model_name:
+            result["Model Category"] = "MultiPRS"
+        elif "AncestryWeightedPRS" in model_name:
+            result["Model Category"] = "AncestryWeightedPRS"
+        elif "Covariates" in model_name:
+            result["Model Category"] = "Covariates"
+        elif "Random" in model_name:
+            result["Model Category"] = "Random"
+        elif "covariates" in model_name:
+            result["Model Category"] = "SinglePRS+Covariates"
         else:
-            if "covariates" in x:
-                return "SinglePRS+Covariates"
-            else:
-                return "SinglePRS"
+            result["Model Category"] = "SinglePRS"
 
-    eval_df["Training biobank"] = eval_df["PGS"].apply(assign_training_biobank)
-    eval_df["Training dataset"] = eval_df["PGS"].apply(map_dataset_name)
-    eval_df["Training cohort"] = eval_df["PGS"].apply(assign_training_cohort)
-    eval_df["Model Name"] = eval_df["PGS"].apply(map_model_name)
-    eval_df["Model Category"] = eval_df["PGS"].apply(assign_model_category)
+        return pd.Series(result)
+
+    eval_df[
+        [
+            "Training biobank",
+            "Training dataset",
+            "Training cohort",
+            "Model Name",
+            "Model Category",
+        ]
+    ] = eval_df.apply(lambda row: process_pgs(row["PGS"], row["AnalysisID"]), axis=1)
+
+    # ----------------------------------------------------------------------
+    # Clean up the names of the evaluation cohorts:
 
     def map_group_name(x):
         try:

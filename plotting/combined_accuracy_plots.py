@@ -17,16 +17,23 @@ from significance_annotation import add_significance_annotations
 def plot_combined_accuracy_metrics(
     metrics_df,
     output_f=None,
+    x="Evaluation Group",
     metric="Incremental_R2",
+    column="AnalysisID",
+    row=None,
     palette="Set2",
+    order=None,
     hue_order=None,
     col_order=None,
     col_wrap=None,
+    row_order=None,
     test_models=None,  # Test if models are significantly different
     significance_symbols=None,
     sharey=False,
+    sharex=False,
     height=5,
     aspect=1,
+    x_tick_rotation=None,
 ):
     # ---------------------------------------------------------------------
     # Sanity checks / preparation
@@ -43,17 +50,20 @@ def plot_combined_accuracy_metrics(
     if hue_order is None:
         _, hue_order = generate_model_colors(metrics_df, metric)
 
-    sorted_groups = sort_groups(metrics_df["Evaluation Group"].unique())
+    if order is None and x == "Evaluation Group":
+        order = sort_groups(metrics_df["Evaluation Group"].unique())
 
     # ---------------------------------------------------------------------
 
     grid = sns.catplot(
-        x="Evaluation Group",
+        x=x,
         y=metric,
-        col="Phenotype",
+        col=column,
         col_wrap=col_wrap,
         col_order=col_order,
-        order=sorted_groups,
+        row=row,
+        row_order=row_order,
+        order=order,
         hue="Model Name",
         palette=palette,
         hue_order=hue_order,
@@ -68,29 +78,30 @@ def plot_combined_accuracy_metrics(
         add_error_bars_to_catplot(
             grid,
             metrics_df,
-            "Evaluation Group",
+            x,
             metric,
             hue="Model Name",
             hue_order=hue_order,
-            col="Phenotype",
+            col=column,
+            row=row,
         )
 
         if test_models is not None:
             add_significance_annotations(
                 grid,
                 metrics_df,
-                "Evaluation Group",
+                x,
                 metric,
                 f"{metric}_err",
                 hue="Model Name",
                 hue_order=hue_order,
                 test_pairs=test_models,
-                x_labels=sorted_groups,
+                x_labels=order,
                 symbols=significance_symbols,
             )
 
     grid.set_axis_labels(
-        x_var="Evaluation Group",
+        x_var=x,
         y_var={
             "Incremental_R2": "Incremental $R^2$",
             "Liability_R2": "Liability $R^2$",
@@ -98,15 +109,26 @@ def plot_combined_accuracy_metrics(
         }[metric],
     )
 
-    for ax in grid.axes.flat:
-        title = ax.get_title()
-        if title.startswith("Phenotype = "):
-            ax.set_title(title.replace("Phenotype = ", ""))
+    subtitle_to_remove = None
+
+    if column is not None:
+        subtitle_to_remove = column
+    if row is not None:
+        subtitle_to_remove = row
+
+    if subtitle_to_remove is not None:
+        for ax in grid.axes.flat:
+            title = ax.get_title()
+            if title.startswith(f"{subtitle_to_remove} = "):
+                ax.set_title(title.replace(f"{subtitle_to_remove} = ", ""))
+
+    if x_tick_rotation is not None:
+        grid.tick_params(axis="x", rotation=x_tick_rotation)
 
     if output_f is None:
         plt.show()
     else:
-        plt.savefig(output_f)
+        plt.savefig(output_f, bbox_inches="tight")
         plt.close()
 
     return grid
@@ -174,45 +196,18 @@ if __name__ == "__main__":
 
     sns.set_context("paper", font_scale=1.5)
 
-    phenotype_cats = {
-        "binary": ["ASTHMA", "T2D"],
-        "continuous": [
-            "HEIGHT",
-            "BMI",
-            "HDL",
-            "LDL",
-            "LOG_TG",
-            "TC",
-            "DBP",
-            "DBP_adj",
-            "LDL_adj",
-            "SBP",
-            "SBP_adj",
-            "TC_adj",
-        ],
-        "sex_biased": ["TST", "URT", "CRTN", "WHR"],
-    }
-
-    metric = {
-        "binary": "Liability_R2",
-        "continuous": "Incremental_R2",
-        "sex_biased": "Incremental_R2",
-    }
-
-    stratification_variable = {
-        "binary": ["Ancestry", "Coarse Ancestry"],
-        "continuous": ["Ancestry", "Coarse Ancestry"],
-        "sex_biased": ["Sex"],
-    }
-
     metrics_dfs = {}
 
     for f in glob.glob(f"data/evaluation/*/{args.biobank}/{args.dataset}_data.csv"):
-        pheno = f.split("/")[-3]
-        try:
-            pheno_cat = [k for k, v in phenotype_cats.items() if pheno in v][0]
-        except IndexError:
-            continue
+        analysis_id = f.split("/")[-3]
+
+        analysis_category = analysis_id.split("_")[-1]
+
+        # Determine stratification variable for evaluation:
+        if analysis_category == "SEX":
+            strat_var = ["Sex"]
+        else:
+            strat_var = ["Ancestry", "Coarse Ancestry"]
 
         df = transform_eval_metrics(read_eval_metrics(f))
 
@@ -228,15 +223,19 @@ if __name__ == "__main__":
         if args.restrict_to_same_biobank:
             df = df.loc[df["Training biobank"] == df["Test biobank"]]
 
-        for eval_cat in stratification_variable[pheno_cat]:
+        if "Liability_R2" in df.columns:
+            df["Incremental_R2"] = df["Liability_R2"]
+            df["Incremental_R2_err"] = df["Liability_R2_err"]
+
+        for eval_cat in strat_var:
             eval_df = postprocess_metrics_df(
                 df,
-                metric[pheno_cat],
+                "Incremental_R2",
                 category=eval_cat,
                 aggregate_single_prs=args.aggregate_single_prs,
             )
 
-            metric_cat = f"{pheno_cat}_{eval_cat}"
+            metric_cat = f"{analysis_category}_{eval_cat}"
 
             if metric_cat not in metrics_dfs:
                 metrics_dfs[metric_cat] = [eval_df]
@@ -263,9 +262,9 @@ if __name__ == "__main__":
             osp.join(
                 output_dir, f"combined_metrics_{args.moe_model}_{pheno_eval_cat}.eps"
             ),
-            metric=metric[pheno_cat],
-            col_order=phenotype_cats[pheno_cat],
-            col_wrap=min(5, len(phenotype_cats[pheno_cat])),
+            metric="Incremental_R2",
+            # col_order=phenotype_cats[pheno_cat],
+            col_wrap=min(5, len(dfs)),
             test_models=[
                 (f"{args.moe_model} ({args.biobank})", f"MultiPRS ({args.biobank})"),
                 (f"{args.moe_model} ({args.biobank})", "Best Single Source PRS"),

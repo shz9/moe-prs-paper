@@ -309,6 +309,22 @@ asthma.to_csv(
 )
 
 # -------------------------------------------------------
+# Process data for stroke:
+
+stroke = pheno_df[["FID", "IID", "STR"]].copy()
+stroke["STR"] = stroke["STR"].replace(binary_nan)
+stroke.columns = ["FID", "IID", "phenotype"]
+print("Stroke")
+print(stroke["phenotype"].describe())
+stroke.to_csv(
+    "data/phenotypes/cartagene/STR.txt",
+    sep="\t",
+    index=False,
+    header=False,
+    na_rep="NA",
+)
+
+# -------------------------------------------------------
 # Process data for T2D:
 
 t2d = pheno_df[["FID", "IID", "T2D"]].copy()
