@@ -393,6 +393,38 @@ gout.to_csv(
 )
 
 # -------------------------------------------------------
+# Process data for AF:
+
+af = pheno_df[["FID", "IID", "AF"]].copy()
+af["AF"] = af["AF"].replace(binary_nan)
+af.columns = ["FID", "IID", "phenotype"]
+print("AF")
+print(af["phenotype"].describe())
+af.to_csv(
+    "data/phenotypes/cartagene/AF.txt",
+    sep="\t",
+    index=False,
+    header=False,
+    na_rep="NA",
+)
+
+# -------------------------------------------------------
+# Process data for HF:
+
+hf = pheno_df[["FID", "IID", "HF"]].copy()
+hf["HF"] = hf["HF"].replace(binary_nan)
+hf.columns = ["FID", "IID", "phenotype"]
+print("HF")
+print(hf["phenotype"].describe())
+hf.to_csv(
+    "data/phenotypes/cartagene/HF.txt",
+    sep="\t",
+    index=False,
+    header=False,
+    na_rep="NA",
+)
+
+# -------------------------------------------------------
 # Process data for CAD:
 
 cad = pheno_df[["FID", "IID", "CAD1", "CAD2", "CAD3", "CAD4"]].copy()
