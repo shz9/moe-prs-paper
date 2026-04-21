@@ -425,7 +425,6 @@ class AncestryWeightedPRS(object):
                     class_weight=self.class_weights,
                     penalty=self._penalty_type,
                     C=C,
-                    max_iter=1000,
                 )
 
             if self.weighing_scheme == "before":
@@ -851,6 +850,37 @@ class AttributePartitionedPRS(object):
 
             # one model per attribute value
             self.reg_model = {k: copy.deepcopy(base) for k in self.attribute_values}
+
+    @classmethod
+    def from_saved_model(cls, param_file):
+        model = cls()
+        with open(param_file, "rb") as pf:
+            (
+                model.reg_model,
+                model.partition_attribute,
+                model.attribute_to_score_map,
+                model.attribute_values,
+                model.score_cols,
+                model.covariates_cols,
+                model.data_scaler,
+                model.family,
+            ) = pickle.load(pf)
+        return model
+
+    @property
+    def N(self):
+        if self.phenotype is not None:
+            return self.phenotype.shape[0]
+
+    @property
+    def K(self):
+        if self.score_cols is not None:
+            return len(self.score_cols)
+
+    @property
+    def C(self):
+        if self.covariates_cols is not None:
+            return len(self.covariates_cols)
 
     # ---------------------------------------------------------------------
     def _extract_input_data(self, prs_dataset, scaler=None):

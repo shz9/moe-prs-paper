@@ -292,7 +292,6 @@ class PRSDataset(Dataset):
         :param refit: If True, refit the scaler even if it has already been fit.
         """
 
-        # TESTING:
         std_cols = (
             list(self.covariates_cols) + [self.phenotype_col] + list(self.prs_cols)
         )
@@ -308,9 +307,13 @@ class PRSDataset(Dataset):
         else:
             # Sanity checks:
             if hasattr(scaler, "feature_names_in_"):
-                assert np.array_equal(scaler.feature_names_in_, std_cols), (
-                    f"Feature names do not match! (1) {scaler.feature_names_in_} (2) {std_cols}"
-                )
+                if not np.array_equal(scaler.feature_names_in_, std_cols):
+                    # Ensure that all the features defined in the scaler do exist in the dataframe:
+                    assert all([c in std_cols for c in scaler.feature_names_in_])
+
+                    # If they do, then use the scaler features as the columns to standardize:
+                    std_cols = scaler.feature_names_in_
+
             elif hasattr(scaler, "n_features_in_"):
                 assert scaler.n_features_in_ == len(std_cols)
 
@@ -330,13 +333,17 @@ class PRSDataset(Dataset):
 
         assert self.scaler is not None
 
-        # TESTING:
-        std_cols = (
-            list(self.covariates_cols) + [self.phenotype_col] + list(self.prs_cols)
-        )
-        std_cols = [c for c in std_cols if c in self.continuous_cols]
-
         if self.scaled_data:
+            if self.scaler.feature_names_in_ is not None:
+                std_cols = self.scaler.feature_names_in_
+            else:
+                std_cols = (
+                    list(self.covariates_cols)
+                    + [self.phenotype_col]
+                    + list(self.prs_cols)
+                )
+                std_cols = [c for c in std_cols if c in self.continuous_cols]
+
             self.data[std_cols] = self.scaler.inverse_transform(self.data[std_cols])
             self.scaled_data = False
 

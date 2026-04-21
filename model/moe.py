@@ -76,6 +76,7 @@ class MoEPRS(object):
         expert_add_intercept=False,
         standardize_data=True,
         gate_penalty=0.0,
+        entropy_penalty=0.0,
         expert_penalty=0.0,
         loss="infer",
         class_weights=None,
@@ -110,6 +111,7 @@ class MoEPRS(object):
         # Process model options/optimization parameters:
 
         self.gate_penalty = gate_penalty
+        self.entropy_penalty = entropy_penalty
         self.expert_penalty = expert_penalty
 
         # Intercept information:
@@ -566,6 +568,12 @@ class MoEPRS(object):
             # np.dot(expert_resp.sum(axis=0), (self.expert_params ** 2).sum(axis=1))
             penalty_term += self.expert_penalty * (self.expert_params**2).sum()
 
+        if self.entropy_penalty > 0:
+            # H(g) = -sum(g * log_g) per sample, averaged over N
+            # We *subtract* entropy from loss (i.e. minimize negative entropy = minimize uniformity)
+            entropy = -np.sum(np.exp(self.log_w) * self.log_w, axis=-1)  # shape (N,)
+            penalty_term += self.entropy_penalty * np.mean(entropy)
+
         return penalty_term
 
     def ll(self, axis=None):
@@ -740,11 +748,12 @@ class MoEPRS(object):
                 log_g = log_softmax(
                     _concat_zero(gate_input.dot(reshaped_gparams)), axis=-1
                 )
+                g = np.exp(log_g)  # Gating probabilities
 
                 # Scale the loss by 1/sample_size for numerical stability?
                 loss = -(1.0 / self.N) * np.sum(selected_expert_resp * log_g)
                 grad = (1.0 / self.N) * gate_input.T.dot(
-                    np.exp(log_g[:, :-1]) - selected_expert_resp[:, :-1]
+                    g[:, :-1] - selected_expert_resp[:, :-1]
                 ).flatten()
 
                 if self.gate_penalty > 0:
@@ -754,6 +763,20 @@ class MoEPRS(object):
 
                     loss += self.gate_penalty * (reshaped_gparams**2).sum()
                     grad += 2.0 * self.gate_penalty * reshaped_gparams.flatten()
+
+                if self.entropy_penalty > 0:
+                    entropy = -np.sum(g * log_g, axis=-1)  # shape (N,), H(g) per sample
+
+                    # d_entropy/d_logit: shape (N, K)
+                    d_entropy_d_logit = g * (-log_g - entropy[:, None])
+
+                    # But we're minimizing, so adding entropy to loss means:
+                    loss += self.entropy_penalty * np.mean(entropy)
+                    grad += (
+                        self.entropy_penalty
+                        * (1.0 / self.N)
+                        * gate_input.T.dot(d_entropy_d_logit[:, :-1]).flatten()
+                    )
 
                 return loss, grad
 
@@ -1142,3 +1165,96 @@ class MoEPRS(object):
                 ],
                 outf,
             )
+
+
+class GroupMeanWeightedPRS:
+    """
+    Group-wise fixed-weight PRS model:
+    for each group g, use mean gate weights in g and apply them to the
+    expert predictions used by predict_prs (scaled experts, no global covariates).
+    """
+
+    def __init__(self, moe_model, group_column, exclude_models=None):
+        self.moe_model = moe_model
+        self.group_column = group_column
+        self.expert_cols = list(getattr(moe_model, "expert_cols", []) or [])
+        self.exclude_models = exclude_models
+
+    def _excluded_indices(self, K):
+        if self.exclude_models is None:
+            return []
+
+        excluded = self.exclude_models
+        if isinstance(excluded, (str, int, np.integer)):
+            excluded = [excluded]
+
+        idx = []
+        for m in excluded:
+            if isinstance(m, (int, np.integer)):
+                i = int(m)
+                if i < 0 or i >= K:
+                    raise ValueError(f"Excluded model index out of bounds: {m}")
+                idx.append(i)
+            else:
+                if len(self.expert_cols) == 0 or m not in self.expert_cols:
+                    raise ValueError(
+                        f"Excluded model '{m}' not found among experts: {self.expert_cols}"
+                    )
+                idx.append(self.expert_cols.index(m))
+
+        return sorted(set(idx))
+
+    def _predict_weighted(self, prs_dataset, expert_predictions):
+        if self.group_column not in prs_dataset.data.columns:
+            raise ValueError(
+                f"Grouping column '{self.group_column}' not found in dataset."
+            )
+
+        gate_probs = np.asarray(self.moe_model.predict_proba(prs_dataset), dtype=float)
+
+        if expert_predictions.shape != gate_probs.shape:
+            raise ValueError(
+                "Mismatch between scaled expert prediction matrix and mixing probability matrix: "
+                f"{expert_predictions.shape} vs {gate_probs.shape}"
+            )
+
+        excluded_idx = self._excluded_indices(gate_probs.shape[1])
+        if len(excluded_idx) > 0:
+            gate_probs = gate_probs.copy()
+            gate_probs[:, excluded_idx] = 0.0
+
+            row_sums = gate_probs.sum(axis=1, keepdims=True)
+            if np.any(row_sums <= 0):
+                raise ValueError(
+                    "exclude_models removed all probability mass for at least one sample."
+                )
+
+            gate_probs = gate_probs / row_sums
+
+        groups = prs_dataset.data[self.group_column].astype(str).values
+        pred = np.full(prs_dataset.N, np.nan, dtype=float)
+        for g in np.unique(groups):
+            msk = groups == g
+            if np.sum(msk) == 0:
+                continue
+            mean_w = gate_probs[msk, :].mean(axis=0)
+            pred[msk] = expert_predictions[msk, :].dot(mean_w)
+
+        return pred
+
+    def predict(self, prs_dataset):
+        expert_preds = np.asarray(
+            self.moe_model.get_predictions(prs_dataset), dtype=float
+        )
+
+        return self._predict_weighted(prs_dataset, expert_preds)
+
+    def predict_prs(self, prs_dataset):
+        expert_preds = np.asarray(
+            self.moe_model.get_scaled_predictions(prs_dataset), dtype=float
+        )
+
+        if self.moe_model.loss == "bce":
+            expert_preds = expit(expert_preds)
+
+        return self._predict_weighted(prs_dataset, expert_preds)

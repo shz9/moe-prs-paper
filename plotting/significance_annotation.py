@@ -2,6 +2,7 @@ import math
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.font_manager import FontProperties
 
 
 def _annotate_significance_panel(
@@ -23,6 +24,8 @@ def _annotate_significance_panel(
     bracket_tick_frac=0.015,
     bracket_line_frac=0.01,
     group_stack_frac=0.06,  # vertical stacking between multiple comparisons in same x group
+    annotation_fontsize="x-small",
+    annotation_fontweight="normal",
 ):
     """
     Annotate a single panel (single Axes) with significance markers.
@@ -164,39 +167,101 @@ def _annotate_significance_panel(
         if not items:
             continue
 
+        # Sort by comparison height so high-bar comparisons are placed first.
+        def item_base_height(item):
+            return item[2] if item[0] == "second_model" else item[4]
+
+        items = sorted(items, key=item_base_height, reverse=True)
+
         y_min, y_max = ax.get_ylim()
         y_range = y_max - y_min if y_max > y_min else 1.0
 
         vpad = vertical_pad_frac * y_range
-        stack_step = group_stack_frac * y_range if len(items) > 1 else 0.0
         tick_h = bracket_tick_frac * y_range
         line_gap = bracket_line_frac * y_range
 
-        for i, item in enumerate(items):
-            extra_y = i * stack_step
+        # Floor for all annotations in this x group: stay above every bar/errorbar top
+        # so significance markers never overlap bars due to comparison ordering.
+        bar_tops = []
+        if hue and hue_order:
+            for hue_val in hue_order:
+                entry = lookup.get((x_lab, hue_val))
+                if entry:
+                    bar_tops.append(entry["mean"] + entry["stderr"])
+        else:
+            entry = lookup.get((x_lab, None))
+            if entry:
+                bar_tops.append(entry["mean"] + entry["stderr"])
+        group_bar_top = max(bar_tops) if bar_tops else y_min
+        annotation_floor = group_bar_top + vpad
 
+        font_points = FontProperties(size=annotation_fontsize).get_size_in_points()
+
+        def points_to_data_height(points, y_ref):
+            display_xy = ax.transData.transform((0.0, y_ref))
+            dy_pixels = points * ax.figure.dpi / 72.0
+            y_shifted = ax.transData.inverted().transform(
+                (display_xy[0], display_xy[1] + dy_pixels)
+            )[1]
+            return abs(y_shifted - y_ref)
+
+        def annotation_text_height(y_ref):
+            return max(points_to_data_height(font_points * 1.2, y_ref), 0.01 * y_range)
+
+        # Keep this as a lower bound to preserve existing behavior, but collision
+        # handling below will push labels further when needed.
+        push_step = max(
+            group_stack_frac * y_range,
+            points_to_data_height(font_points * 1.0, y_max),
+            1e-12,
+        )
+        min_gap = max(points_to_data_height(font_points * 0.25, y_max), 0.002 * y_range)
+        occupied_spans = []
+
+        def collides(proposed_span):
+            low, high = proposed_span
+            for prev_low, prev_high in occupied_spans:
+                if (low < prev_high + min_gap) and (high > prev_low - min_gap):
+                    return True
+            return False
+
+        for item in items:
             if item[0] == "second_model":
                 _, x_anchor, base_y, symbol = item
-                y_text = base_y + vpad + extra_y
+                y_text = max(base_y + vpad, annotation_floor)
+                text_h = annotation_text_height(y_text)
+                span = (y_text, y_text + text_h)
+                while collides(span):
+                    y_text += push_step
+                    span = (y_text, y_text + text_h)
 
                 ax.text(
                     x_anchor,
                     y_text,
                     symbol,
+                    fontsize=annotation_fontsize,
                     ha="center",
                     va="bottom",
                     color="grey",
-                    fontweight="bold",
+                    fontweight=annotation_fontweight,
                 )
 
-                text_height_estimate = 0.04 * y_range
-                needed_ymax = y_text + text_height_estimate
+                occupied_spans.append(span)
+                needed_ymax = span[1] + 0.2 * text_h
                 if needed_ymax > y_max:
                     y_max = needed_ymax
 
             else:
                 _, x_left, x_right, x_mid, base_y, symbol = item
-                y_bracket = base_y + vpad + extra_y
+                y_bracket = max(base_y + vpad, annotation_floor)
+                line_gap_dynamic = max(line_gap, points_to_data_height(font_points * 0.3, y_bracket))
+                text_h = annotation_text_height(y_bracket)
+                y_text = y_bracket + tick_h + line_gap_dynamic
+                span = (y_bracket, y_text + text_h)
+                while collides(span):
+                    y_bracket += push_step
+                    y_text = y_bracket + tick_h + line_gap_dynamic
+                    span = (y_bracket, y_text + text_h)
 
                 ax.plot(
                     [x_left, x_left],
@@ -217,19 +282,19 @@ def _annotate_significance_panel(
                     lw=1,
                 )
 
-                y_text = y_bracket + tick_h + line_gap
                 ax.text(
                     x_mid,
                     y_text,
                     symbol,
+                    fontsize=annotation_fontsize,
                     ha="center",
                     va="bottom",
                     color="grey",
-                    fontweight="bold",
+                    fontweight=annotation_fontweight,
                 )
 
-                text_height_estimate = 0.04 * y_range
-                needed_ymax = y_text + text_height_estimate
+                occupied_spans.append(span)
+                needed_ymax = span[1] + 0.2 * text_h
                 if needed_ymax > y_max:
                     y_max = needed_ymax
 
@@ -250,6 +315,8 @@ def add_significance_annotations(
     dodge_width=0.8,
     alpha=0.05,
     annotation_mode="bracket",  # "bracket" or "second_model"
+    annotation_fontsize="x-small",
+    annotation_fontweight="normal",
 ):
     """
     Works for single Axes or seaborn FacetGrid.
@@ -274,6 +341,8 @@ def add_significance_annotations(
             dodge_width=dodge_width,
             alpha=alpha,
             annotation_mode=annotation_mode,
+            annotation_fontsize=annotation_fontsize,
+            annotation_fontweight=annotation_fontweight,
         )
         return
 
@@ -322,4 +391,6 @@ def add_significance_annotations(
                 dodge_width=dodge_width,
                 alpha=alpha,
                 annotation_mode=annotation_mode,
+                annotation_fontsize=annotation_fontsize,
+                annotation_fontweight=annotation_fontweight,
             )

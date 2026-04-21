@@ -1026,7 +1026,7 @@ if __name__ == "__main__":
                 group_col="Ancestry",
                 title=f"PRS Mixture Graph for {phenotypes[pheno]} ({biobank_name})",
                 output_file=f"figures/section_3/admixture_graphs_{pheno}_{biobank}.png",
-                subsample_within_groups=True,
+                subsample=True,
                 agg_mechanism="sort",
                 figsize=(g.fig.get_size_inches()[0], 3.1),
             )
@@ -1122,7 +1122,7 @@ if __name__ == "__main__":
                 group_col="Ancestry",
                 title=f"PRS Mixture Graph for {phenotypes[pheno]} ({biobank_name})",
                 output_file=f"figures/section_3/admixture_graphs_{pheno}_{biobank}_fixed_var.png",
-                subsample_within_groups=True,
+                subsample=True,
                 agg_mechanism="sort",
                 figsize=(g.fig.get_size_inches()[0], 3.1),
             )

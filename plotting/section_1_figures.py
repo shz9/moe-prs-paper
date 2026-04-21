@@ -90,10 +90,12 @@ def plot_gate_mixing_weights_colored_by_ancestry(weights_df, output_f, order=Non
     plt.close()
 
 
-def plot_gate_mixing_weights_colored_by_sex(weights_df, output_f, order=None):
+def plot_gate_mixing_weights_colored_by_sex(
+    weights_df, output_f, x="Age", x_label="Age at recruitment", order=None
+):
     g = sns.relplot(
         data=weights_df,
-        x="Age",
+        x=x,
         y="P(Male_PGS)",
         col="Phenotype",  # Creates one subplot per phenotype
         col_order=order,
@@ -124,8 +126,57 @@ def plot_gate_mixing_weights_colored_by_sex(weights_df, output_f, order=None):
             ax.set_title(title.replace("Phenotype = ", ""))
 
     g.set_axis_labels(
-        x_var="Age at recruitment", y_var="Mixing weight for male PRS\nP(Male_PRS)"
+        x_var=x or x_label, y_var="Mixing weight for male PRS\nP(Male_PRS)"
     )
+
+    plt.savefig(output_f, bbox_inches="tight", dpi=400)
+    plt.close()
+
+
+def plot_gate_mixing_weights_categorical(weights_df, output_f, order=None):
+    g = sns.catplot(
+        data=weights_df,
+        x="Ancestry",
+        y="P(Male_PGS)",
+        hue="Sex",
+        col="Phenotype",
+        col_order=order,
+        kind="violin",
+        inner=None,
+        dodge=True,
+        height=5,
+        aspect=1,
+        palette={
+            "Female": "#F98866",
+            "Male": "#A1BE95",
+        },
+        # facet_kws={"sharex": True, "sharey": True},
+    )
+
+    # overlay individual points
+    g.map_dataframe(
+        sns.stripplot,
+        x="Ancestry",
+        y="P(Male_PGS)",
+        hue="Sex",
+        dodge=True,
+        jitter=True,
+        alpha=0.3,
+        linewidth=0.5,
+        edgecolor="auto",
+    )
+
+    # Set the alpha of legend handles to 1 (full opacity)
+    for lh in g.legend.legend_handles:
+        lh.set_alpha(1)
+
+    # Remove the "Phenotype = " prefix from the title:
+    for ax in g.axes.flat:
+        title = ax.get_title()
+        if title.startswith("Phenotype = "):
+            ax.set_title(title.replace("Phenotype = ", ""))
+
+    g.set_axis_labels(x_var="Ancestry", y_var="Mixing weight for male PRS\nP(Male_PRS)")
 
     plt.savefig(output_f, bbox_inches="tight", dpi=400)
     plt.close()
@@ -151,7 +202,9 @@ def extract_weights_data(biobank="ukbb"):
             np.array(["Female", "Male"])[dataset.get_data_columns("Sex").astype(int)],
             columns=["Sex"],
         )
-        w_df[["Age", "Ancestry"]] = dataset.get_data_columns(["Age", "Ancestry"])
+        w_df[["Age", "Ancestry", "PC1", "PC2", "PC4", "PC5"]] = (
+            dataset.get_data_columns(["Age", "Ancestry", "PC1", "PC2", "PC4", "PC5"])
+        )
 
         prs_col_names = []
         for prs_col in dataset.prs_cols:
@@ -220,6 +273,11 @@ def extract_stratified_evaluation_metrics(
         index="EvalGroup", columns="PGS", values="Incremental_R2"
     ).reset_index()
     tr_df["Ratio"] = tr_df[male_pgs] / tr_df[female_pgs]
+
+    print("Phenotype:", pheno)
+    print("Test biobank:", test_biobank)
+    print(tr_df)
+    print("= = = = = = = ")
 
     return tr_df
 
@@ -463,15 +521,20 @@ if __name__ == "__main__":
         "Female PRS": "#F98866",
         "MoEPRS": "#375E97",
         "MultiPRS": "#FFBB00",
+        "Sex-matched PRS": "#66C2A5",
     }
 
-    hue_order = ["MoEPRS", "MultiPRS", "Female PRS", "Male PRS"]
+    hue_order = ["MoEPRS", "MultiPRS", "Sex-matched PRS", "Female PRS", "Male PRS"]
     phenotype_order = ["Waist-hip ratio", "Log Testosterone", "Log Creatinine", "Urate"]
 
     ukbb_metrics_dfs = extract_accuracy_data()
 
+    ukbb_metrics_dfs["Model Name"] = ukbb_metrics_dfs["Model Name"].replace(
+        "SexMatchedPRS", "Sex-matched PRS"
+    )
+
     ukbb_metrics_dfs["Model Name"] = ukbb_metrics_dfs["Model Name"] + np.where(
-        ukbb_metrics_dfs["Model Category"].isin(["MoE", "MultiPRS"]), "", " PRS"
+        ukbb_metrics_dfs["Model Category"].isin(["Male", "Female"]), " PRS", ""
     )
 
     ukbb_w_dfs = extract_weights_data()
@@ -485,7 +548,7 @@ if __name__ == "__main__":
         col_order=ukb_col_order,
         palette=palette,
         hue_order=hue_order,
-        test_models=("MoEPRS", "MultiPRS"),
+        test_models=[("MoEPRS", "MultiPRS"), ("MoEPRS", "Sex-matched PRS")],
     )
 
     plot_gate_mixing_weights_colored_by_sex(
@@ -494,9 +557,24 @@ if __name__ == "__main__":
         order=ukb_col_order,
     )
 
+    for pc in ("PC1", "PC2", "PC4", "PC5"):
+        plot_gate_mixing_weights_colored_by_sex(
+            ukbb_w_dfs,
+            f"figures/section_1/ukb_weights_{pc}.png",
+            x=pc,
+            order=ukb_col_order,
+            x_label=None,
+        )
+
     plot_gate_mixing_weights_colored_by_ancestry(
         ukbb_w_dfs,
         "figures/section_1/ukb_weights_ancestry_colored.png",
+        order=ukb_col_order,
+    )
+
+    plot_gate_mixing_weights_categorical(
+        ukbb_w_dfs,
+        "figures/section_1/ukb_weights_categorical.png",
         order=ukb_col_order,
     )
 
@@ -504,10 +582,14 @@ if __name__ == "__main__":
         test_biobank="cartagene", train_biobank="cartagene"
     )
 
+    cartagene_metrics_dfs["Model Name"] = cartagene_metrics_dfs["Model Name"].replace(
+        "SexMatchedPRS", "Sex-matched PRS"
+    )
+
     cartagene_metrics_dfs["Model Name"] = cartagene_metrics_dfs[
         "Model Name"
     ] + np.where(
-        cartagene_metrics_dfs["Model Category"].isin(["MoE", "MultiPRS"]), "", " PRS"
+        cartagene_metrics_dfs["Model Category"].isin(["Male", "Female"]), " PRS", ""
     )
 
     cartagene_w_dfs = extract_weights_data(biobank="cartagene")
@@ -522,7 +604,7 @@ if __name__ == "__main__":
         col_order=cag_col_order,
         palette=palette,
         hue_order=hue_order,
-        test_models=("MoEPRS", "MultiPRS"),
+        test_models=[("MoEPRS", "MultiPRS"), ("MoEPRS", "Sex-matched PRS")],
     )
 
     plot_gate_mixing_weights_colored_by_sex(
@@ -534,6 +616,12 @@ if __name__ == "__main__":
     plot_gate_mixing_weights_colored_by_ancestry(
         cartagene_w_dfs,
         "figures/section_1/cartagene_weights_ancestry_colored.png",
+        order=cag_col_order,
+    )
+
+    plot_gate_mixing_weights_categorical(
+        cartagene_w_dfs,
+        "figures/section_1/cartagene_weights_categorical.png",
         order=cag_col_order,
     )
 
@@ -574,6 +662,38 @@ if __name__ == "__main__":
     plot_relative_stratified_evaluation(
         phenotype="URT_SEX",
         output_path="figures/section_1/stratified_urate_accuracy.pdf",
+        cohort_specs=[
+            {
+                "dataset": "ukbb",
+                "label": "EAS Samples in UKB",
+                "keep_ancestry": ["EAS"],
+            },
+            {
+                "dataset": "ukbb",
+                "label": "AFR Samples in UKB",
+                "keep_ancestry": ["AFR"],
+            },
+            {
+                "dataset": "ukbb",
+                "label": "CSA Samples in UKB",
+                "keep_ancestry": ["CSA"],
+            },
+            {
+                "dataset": "cartagene",
+                "label": "Non-European Samples in CaG",
+                "exclude_ancestry": ["EUR"],
+            },
+            {
+                "dataset": "cartagene",
+                "label": "European Samples in CaG",
+                "keep_ancestry": ["EUR"],
+            },
+        ],
+    )
+
+    plot_relative_stratified_evaluation(
+        phenotype="WHR_SEX",
+        output_path="figures/section_1/stratified_whr_accuracy.pdf",
         cohort_specs=[
             {
                 "dataset": "ukbb",

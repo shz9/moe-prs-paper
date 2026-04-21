@@ -21,7 +21,6 @@ from PRSDataset import PRSDataset
 
 
 def plot_admixture_graphs(
-    analysis_id,
     prs_dataset,
     model,
     title=None,
@@ -30,7 +29,8 @@ def plot_admixture_graphs(
     sort_col=None,
     sorted_groups=None,
     min_group_size=50,
-    subsample_within_groups=False,
+    max_group_size=10_000,
+    subsample=False,
     agg_mechanism="mean",
     figsize="auto",
     palette="Set3",
@@ -42,6 +42,8 @@ def plot_admixture_graphs(
     )
 
     prs_dataset.set_backend("numpy")
+
+    analysis_id = prs_dataset.analysis_id
 
     proba = np.asarray(model.predict_proba(prs_dataset))
 
@@ -78,9 +80,9 @@ def plot_admixture_graphs(
         if sorted_groups is None and group_col in ("Ancestry", "UMAP_Cluster"):
             sorted_groups = sort_groups(proba[group_col].unique())
 
-        if subsample_within_groups:
+        if subsample:
             max_group_size = 2 * min(
-                int(np.median(proba.groupby(group_col).size())), 5000
+                int(np.median(proba.groupby(group_col).size())), max_group_size // 2
             )
 
             def cond_subsample_func(x):
@@ -115,6 +117,9 @@ def plot_admixture_graphs(
             tick_rotation=tick_rotation,
         )
     else:
+        if subsample and proba.shape[0] > max_group_size:
+            proba = proba.sample(max_group_size)
+
         return plot_expert_weights(
             proba,
             sort_col=sort_col,
@@ -210,13 +215,10 @@ if __name__ == "__main__":
 
     if args.group_col is None:
         plot_output_file = osp.join(data_path, model_path + args.extension)
-        plot_admixture_graphs(
-            analysis_id, p_dataset, moe_like, output_file=plot_output_file
-        )
+        plot_admixture_graphs(p_dataset, moe_like, output_file=plot_output_file)
     else:
         for gcol in args.group_col:
             plot_admixture_graphs(
-                analysis_id,
                 p_dataset,
                 moe_like,
                 group_col=gcol,
@@ -224,5 +226,5 @@ if __name__ == "__main__":
                     data_path, model_path + f"_{gcol}{args.extension}"
                 ),
                 agg_mechanism=args.agg_mechanism,
-                subsample_within_groups=args.subsample,
+                subsample=args.subsample,
             )

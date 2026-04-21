@@ -29,6 +29,10 @@ cols_dict = {
     "ANGINA_OCCURRENCE": "CAD2",
     "ATHEROSCLEROSIS_OCCURRENCE": "CAD3",
     "HEART_DISEASE_OCCURRENCE": "CAD4",
+    # Heart failure:
+    "HEART_FAILURE_OCCURRENCE": "HF",
+    # Atrial fibrillation:
+    "ATRIAL_FIBRILLATION_OCCURRENCE": "AF",
     # Stroke:
     "STROKE_OCCURRENCE": "STR",
     # Hypertension:

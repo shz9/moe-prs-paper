@@ -1,4 +1,5 @@
 import argparse
+import glob
 import os.path as osp
 import sys
 
@@ -7,10 +8,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from magenpy.utils.system_utils import makedir
-from viprs.eval.continuous_metrics import (
-    incremental_r2,
-    pearson_r,
-)
+from scipy.spatial.distance import jensenshannon
 
 parent_dir = osp.dirname(osp.dirname(osp.abspath(__file__)))
 sys.path.append(parent_dir)
@@ -18,253 +16,147 @@ sys.path.append(osp.join(parent_dir, "model/"))
 sys.path.append(osp.join(parent_dir, "evaluation/"))
 
 from combined_accuracy_plots import plot_combined_accuracy_metrics
+from eval_utils import rowwise_cosine_similarity
 from moe import MoEPRS
 from plot_pgs_admixture import plot_admixture_graphs
 from plot_predictive_performance import postprocess_metrics_df
 from plot_utils import (
+    ANALYSIS_TO_PHENOTYPE_MAP,
     BIOBANK_NAME_MAP_SHORT,
-    MODEL_NAME_MAP,
-    PHENOTYPE_NAME_MAP,
-    assign_ancestry_consistent_colors,
-    assign_models_consistent_colors,
     read_eval_metrics,
     transform_eval_metrics,
 )
 from PRSDataset import PRSDataset
 
 
-def plot_mixing_weight_comparison_quantitative(biobank="ukbb"):
-    bbk_name = {"ukbb": "UKB", "cartagene": "CaG"}
+def extract_accuracy_data_all_phenotypes(
+    moe_model_name,
+    biobank,
+    dataset="test_data",
+    analysis_category="MA",
+    keep_analyses=None,
+    exclude_analyses=None,
+    exclude_all=True,
+):
+    analysis_results = []
 
-    test_dat = PRSDataset.from_pickle(
-        f"data/harmonized_data/HEIGHT/{biobank}/test_data.pkl"
-    )
+    for d in glob.glob(f"data/harmonized_data/*_{analysis_category}/{biobank}"):
+        analysis_id = d.split("/")[-2]
 
-    ukb_model = MoEPRS.from_saved_model(
-        f"data/trained_models/HEIGHT/ukbb/train_data/{args.moe_model}.pkl"
-    )
-    cag_model = MoEPRS.from_saved_model(
-        f"data/trained_models/HEIGHT/cartagene/train_data/{args.moe_model}.pkl"
-    )
+        if keep_analyses is not None:
+            if analysis_id not in keep_analyses:
+                continue
 
-    prob_ukb = ukb_model.predict_proba(test_dat)
-    prob_cag = cag_model.predict_proba(test_dat)
+        if exclude_analyses is not None:
+            if analysis_id in exclude_analyses:
+                continue
 
-    # Step 1: Extract mean weights data:
-    mean_weighs_ukb = pd.DataFrame(
-        {
-            "Mean Mixing Weight": prob_ukb.mean(axis=0),
-            "Stratified PRS": [
-                MODEL_NAME_MAP[test_dat.prs_cols[i]] for i in range(prob_ukb.shape[1])
-            ],
-        }
-    )
-    mean_weighs_ukb["Training data"] = "UKB"
-
-    mean_weighs_cag = pd.DataFrame(
-        {
-            "Mean Mixing Weight": prob_cag.mean(axis=0),
-            "Stratified PRS": [
-                MODEL_NAME_MAP[test_dat.prs_cols[i]] for i in range(prob_cag.shape[1])
-            ],
-        }
-    )
-    mean_weighs_cag["Training data"] = "CaG"
-
-    mean_weights = pd.concat([mean_weighs_ukb, mean_weighs_cag], ignore_index=True)
-
-    # Step 2: Extract Pearson correlation data:
-
-    corr_data = []
-
-    for i in range(prob_ukb.shape[1]):
-        corr_data.append(
-            {
-                "Stratified PRS": MODEL_NAME_MAP[test_dat.prs_cols[i]],
-                "Pearson $R$": np.corrcoef(prob_ukb[:, i], prob_cag[:, i])[0, 1],
-            }
+        analysis_results.append(
+            extract_accuracy_data(
+                moe_model_name,
+                analysis_id,
+                biobank,
+                dataset=dataset,
+                exclude_all=exclude_all,
+            )
         )
 
-    corr_data = pd.DataFrame(corr_data)
+        if "Liability_R2" in analysis_results[-1].columns:
+            analysis_results[-1]["Incremental_R2"] = analysis_results[-1][
+                "Liability_R2"
+            ]
+            analysis_results[-1]["Incremental_R2_err"] = analysis_results[-1][
+                "Liability_R2_err"
+            ]
 
-    # Step 3: Plot the data:
+    df = pd.concat(analysis_results).reset_index(drop=True)
 
-    fig, axes = plt.subplots(
-        1, 2, figsize=(6.5, 2.9), sharey=True, gridspec_kw={"width_ratios": [1, 1.3]}
-    )
-    axes = axes.flatten()
-
+    # Simplify the ancestry weighted model:
     if biobank == "ukbb":
-        x_order = list(
-            mean_weighs_ukb.sort_values("Mean Mixing Weight")["Stratified PRS"].values
-        )[::-1]
+        df = df.loc[df["Model Name"] != "Ancestry-weighted PRS (CaG)"]
+        df["Model Name"] = df["Model Name"].replace(
+            "Ancestry-weighted PRS (UKB)", "Ancestry-weighted PRS"
+        )
     else:
-        x_order = list(
-            mean_weighs_cag.sort_values("Mean Mixing Weight")["Stratified PRS"].values
-        )[::-1]
+        df = df.loc[df["Model Name"] != "Ancestry-weighted PRS (UKB)"]
+        df["Model Name"] = df["Model Name"].replace(
+            "Ancestry-weighted PRS (CaG)", "Ancestry-weighted PRS"
+        )
 
-    sns.barplot(
-        data=mean_weights,
-        y="Stratified PRS",
-        x="Mean Mixing Weight",
-        ax=axes[0],
-        order=x_order,
-        palette={"UKB": "#005f6f", "CaG": "#64daf3"},
-        hue="Training data",
-        orient="h",
-    )
-    axes[0].set_title("Mean mixing weights per PRS")
-
-    sns.barplot(
-        data=corr_data,
-        y="Stratified PRS",
-        x="Pearson $R$",
-        ax=axes[1],
-        order=x_order,
-        hue="Stratified PRS",
-        palette=assign_models_consistent_colors(corr_data["Stratified PRS"].unique()),
-        orient="h",
-    )
-    axes[1].set_title("Cross-biobank correlation\nof mixing weights per PRS")
-
-    mean_corr = corr_data["Pearson $R$"].mean()
-
-    axes[1].axvline(mean_corr, color="gray", linestyle="--", linewidth=1)
-
-    axes[1].text(
-        y=axes[1].get_ylim()[0] - 0.05,
-        x=mean_corr + 0.05,
-        s=f"Mean={mean_corr:.2}",
-        ha="left",
-        va="bottom",
-        fontsize="smaller",
-        color="black",
-        rotation=0,
-    )
-
-    axes[0].set_xscale("log")
-    axes[1].set_xticks(
-        np.arange(np.floor(corr_data["Pearson $R$"].min() * 4) / 4, 1.25, 0.25)
-    )
-
-    fig.suptitle(
-        f"Concordance between UKB- and CaG-trained\n$MoEPRS$ "
-        f"models on independent test samples in {bbk_name[biobank]}",
-        y=0.9,
-    )
-
-    plt.tight_layout()
-    plt.savefig(
-        f"figures/section_2/mixing_weight_quant_comparison_{biobank}.png", dpi=400
-    )
-    plt.close()
+    return df
 
 
-def plot_mixing_weight_comparison(biobank="ukbb"):
-    bbk_name = {"ukbb": "UKB", "cartagene": "CaG"}
-
+def extract_mixing_weight_similarity(
+    moe_model_name,
+    analysis_id,
+    biobank,
+    metric="cosine",  # "cosine" or "jsd"
+):
     test_dat = PRSDataset.from_pickle(
-        f"data/harmonized_data/HEIGHT/{biobank}/test_data.pkl"
+        f"data/harmonized_data/{analysis_id}/{biobank}/test_data.pkl"
     )
 
     ukb_model = MoEPRS.from_saved_model(
-        f"data/trained_models/HEIGHT/ukbb/train_data/{args.moe_model}.pkl"
+        f"data/trained_models/{analysis_id}/ukbb/train_data/{moe_model_name}.pkl"
     )
     cag_model = MoEPRS.from_saved_model(
-        f"data/trained_models/HEIGHT/cartagene/train_data/{args.moe_model}.pkl"
+        f"data/trained_models/{analysis_id}/cartagene/train_data/{moe_model_name}.pkl"
     )
 
-    prob_ukb = ukb_model.predict_proba(test_dat)
-    prob_cag = cag_model.predict_proba(test_dat)
+    prob_ukb = np.asarray(ukb_model.predict_proba(test_dat), dtype=float)
+    prob_cag = np.asarray(cag_model.predict_proba(test_dat), dtype=float)
 
-    # Create 2x3 subplot grid
-    fig, axes = plt.subplots(2, 3, figsize=(12, 6))
-    axes = axes.flatten()
+    if prob_ukb.shape != prob_cag.shape:
+        raise ValueError(
+            f"Shape mismatch: prob_ukb has shape {prob_ukb.shape}, "
+            f"prob_cag has shape {prob_cag.shape}"
+        )
 
-    handles, labels = [], []
+    # Generate masks for different subsets of the data:
 
-    # Plot using seaborn.scatterplot with hue
-    for i in range(prob_ukb.shape[1]):
-        model_name = MODEL_NAME_MAP[test_dat.prs_cols[i]]
-        x_axis = f"P({model_name}) - UKB-trained MoE"
-        y_axis = f"P({model_name}) - CaG-trained MoE"
+    masks = {
+        "All": np.arange(prob_ukb.shape[0]),
+        "EUR": test_dat.data["Ancestry"].values == "EUR",
+        "non-EUR": test_dat.data["Ancestry"].values != "EUR",
+    }
 
-        df = pd.DataFrame(
+    sim_result = []
+
+    for msk, msk_val in masks.items():
+        if metric == "cosine":
+            similarity = rowwise_cosine_similarity(
+                prob_ukb[msk_val, :], prob_cag[msk_val, :]
+            )
+        elif metric == "jsd":
+            # jensenshannon returns Jensen-Shannon distance, so convert to similarity
+            similarity = 1.0 - jensenshannon(
+                prob_ukb[msk_val, :], prob_cag[msk_val, :], axis=1, base=2
+            )
+        else:
+            raise ValueError("metric must be either 'cosine' or 'jsd'")
+
+        sim_result.append(
             {
-                x_axis: prob_ukb[:, i],
-                y_axis: prob_cag[:, i],
-                "Ancestry": test_dat.data["Ancestry"],
+                "Cohort": msk,
+                "Similarity": np.mean(similarity),
+                "Phenotype": ANALYSIS_TO_PHENOTYPE_MAP[analysis_id],
             }
         )
 
-        ax = axes[i]
-
-        # For the first subplot, extract handles/labels for the legend
-        if i == 0:
-            sns.scatterplot(
-                data=df,
-                x=x_axis,
-                y=y_axis,
-                hue="Ancestry",
-                palette=assign_ancestry_consistent_colors(df["Ancestry"].unique()),
-                ax=ax,
-                legend="full",
-                alpha=0.5,
-            )
-            handles, labels = ax.get_legend_handles_labels()
-            ax.get_legend().remove()  # Remove legend from subplot after extracting
-        else:
-            sns.scatterplot(
-                data=df,
-                x=x_axis,
-                y=y_axis,
-                hue="Ancestry",
-                palette=assign_ancestry_consistent_colors(df["Ancestry"].unique()),
-                ax=ax,
-                legend=False,
-                alpha=0.5,
-            )
-
-        ax.set_title(
-            f"Comparison of mixing weights for {model_name} PRS\nPearson R={np.corrcoef(df[x_axis], df[y_axis])[0, 1]:.2}"
-        )
-        ax.set_ylim(0.0, 1.0)
-        ax.set_xlim(0.0, 1.0)
-
-    # Use sixth subplot for shared legend
-    axes[5].axis("off")
-    legend = axes[5].legend(
-        handles=handles,
-        labels=labels,
-        title="Sample ancestry",
-        loc="center",
-        frameon=False,
-    )
-
-    # Adjust the alpha for the legend handles:
-    for lh in legend.legend_handles:
-        lh.set_alpha(1)
-
-    fig.suptitle(
-        f"Mixing weights for ancestry-stratified PRSs for Standing Height in {bbk_name[biobank]}"
-    )
-
-    # Adjust layout
-    plt.tight_layout()
-    plt.savefig(f"figures/section_2/mixing_weight_comparison_{biobank}.png", dpi=400)
-    plt.close()
+    return pd.DataFrame(sim_result)
 
 
 def extract_accuracy_data(
     moe_model_name,
-    phenotype="HEIGHT",
-    test_biobank="ukbb",
+    analysis_id,
+    test_biobank,
     metric="Incremental_R2",
     dataset="test_data",
-    evaluation_category="Ancestry",
+    evaluation_category="Coarse Ancestry",
+    exclude_all=True,
 ):
     # Extract accuracy metrics:
-    f = f"data/evaluation/{phenotype}/{test_biobank}/{dataset}.csv"
+    f = f"data/evaluation/{analysis_id}/{test_biobank}/{dataset}.csv"
     df = transform_eval_metrics(read_eval_metrics(f))
 
     df = df.loc[
@@ -288,7 +180,7 @@ def extract_accuracy_data(
     for m, m_new in {
         moe_model_name: "MoEPRS",
         "MultiPRS": "MultiPRS",
-        "AncestryWeightedPRS": "AncestryWeightedPRS",
+        "AncestryWeightedPRS": "Ancestry-weighted PRS",
     }.items():
         df["Model Name"] = df["Model Name"].str.replace(
             f"{m} (ukbb)", f"{m_new} (UKB)", regex=False
@@ -297,93 +189,33 @@ def extract_accuracy_data(
             f"{m} (cartagene)", f"{m_new} (CaG)", regex=False
         )
 
+    # Correction for binary phenotypes:
+    if metric == "Incremental_R2" and "Liability_R2" in df.columns:
+        metric = "Liability_R2"
+
     dfs = postprocess_metrics_df(
         df,
         metric,
         category=evaluation_category,
         min_sample_size=50,
         aggregate_single_prs=True,
-        include_cohort_matched=True,
     )
 
-    dfs["Phenotype"] = PHENOTYPE_NAME_MAP[phenotype]
-    dfs["Phenotype"] += f" ({BIOBANK_NAME_MAP_SHORT[test_biobank]})"
+    if exclude_all:
+        dfs = dfs.loc[dfs["Evaluation Group"] != "All"]
+
+    dfs["Phenotype"] = ANALYSIS_TO_PHENOTYPE_MAP[analysis_id]
+    # dfs["Phenotype"] += f" ({BIOBANK_NAME_MAP_SHORT[test_biobank]})"
 
     return dfs
-
-
-def plot_performance_on_ancestry_group(biobank="ukbb", ancestry="AMR"):
-    dataset = PRSDataset.from_pickle(
-        f"data/harmonized_data/HEIGHT/{biobank}/train_data.pkl"
-    )
-    dataset.standardize_data()
-    dataset.filter_samples(dataset.data["Ancestry"] == ancestry)
-
-    metrics = {}
-
-    # Compute metrics:
-    for prs in dataset.prs_cols:
-        inc_r2 = incremental_r2(
-            dataset.data["HEIGHT"].values,
-            dataset.data[prs].values,
-            covariates=pd.DataFrame(dataset.get_covariates()),
-        )
-        p_corr = pearson_r(dataset.data["HEIGHT"].values, dataset.data[prs].values)
-
-        metrics[MODEL_NAME_MAP[prs]] = (
-            f"{MODEL_NAME_MAP[prs]} (Incremental $R^2$= {inc_r2:.2}; Pearson R={p_corr:.2})"
-        )
-
-    melt_df = pd.melt(
-        dataset.data[["IID", "HEIGHT"] + dataset.prs_ids],
-        id_vars=["IID", "HEIGHT"],
-        var_name="Stratified PGS",
-        value_name="Polygenic Score",
-    )
-    melt_df["Stratified PRS"] = melt_df["Stratified PGS"].map(MODEL_NAME_MAP)
-
-    plt.figure(figsize=(8, 6))
-
-    ax = sns.scatterplot(
-        data=melt_df,
-        x="Polygenic Score",
-        y="HEIGHT",
-        hue="Stratified PRS",
-        palette=assign_models_consistent_colors(melt_df["Stratified PRS"].unique()),
-        alpha=0.5,
-    )
-
-    handles, labels = ax.get_legend_handles_labels()
-    legend = ax.legend(
-        handles=handles,
-        labels=[metrics[label] for label in labels],
-        title="Stratified PRS",
-        fontsize="x-small",
-        bbox_to_anchor=(1.05, 0.5),
-        loc="center left",
-        borderaxespad=0.0,
-    )
-
-    # Adjust the alpha for the legend handles:
-    for lh in legend.legend_handles:
-        lh.set_alpha(1)
-
-    ax.set_ylabel("Standing Height")
-    bbk_name = {"ukbb": "UKB", "cartagene": "CaG"}[biobank]
-
-    ax.set_title(
-        f"Performance of stratified PRS for\nStanding Height on {ancestry} samples in {bbk_name}"
-    )
-
-    plt.tight_layout()
-    plt.savefig(f"figures/section_2/perf_{ancestry}_{biobank}.png", dpi=400)
-    plt.close()
 
 
 # -----------------------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Plot Figure 2 of manuscript")
+    parser = argparse.ArgumentParser(
+        description="Plot figures of section 2 of manuscript"
+    )
 
     parser.add_argument(
         "--moe-model",
@@ -393,213 +225,180 @@ if __name__ == "__main__":
         help="The name of the MoE model to plot as reference.",
     )
 
+    parser.add_argument(
+        "--similarity-metric",
+        dest="sim_metric",
+        type=str,
+        default="cosine",
+        choices={"cosine", "jsd"},
+        help="The similarity metric for the mixing weights.",
+    )
+
     args = parser.parse_args()
 
     sns.set_context("paper", font_scale=1.5)
     makedir("figures/section_2/")
 
-    # ---------------- Plot accuracy subpanels ----------------
+    palette = {
+        "MoEPRS (UKB)": "#375E97",
+        "MoEPRS (CaG)": "#8CA8D8",
+        "MultiPRS (UKB)": "#FFBB00",
+        "MultiPRS (CaG)": "#FFE066",
+        "Best Single Source PRS": "#BC80BD",
+        "Ancestry-weighted PRS": "#66C2A5",
+    }
 
-    ukb_data = extract_accuracy_data("ukbb")
-    cag_data = extract_accuracy_data("cartagene")
+    metric_name = {"cosine": "Cosine similarity", "jsd": "Jensen-Shannon similarity"}
 
-    all_data = pd.concat([ukb_data, cag_data], axis=0).reset_index(drop=True)
+    hue_order = [
+        "MoEPRS (UKB)",
+        "MoEPRS (CaG)",
+        "MultiPRS (UKB)",
+        "MultiPRS (CaG)",
+        "Best Single Source PRS",
+        "Ancestry-weighted PRS",
+    ]
 
-    g = plot_combined_accuracy_metrics(
-        all_data,
-        output_f="figures/section_2/accuracy_subpanels.eps",
-        col_order=["Standing Height (UKB)", "Standing Height (CaG)"],
-        hue_order=[
-            "MoEPRS (UKB)",
-            "MoEPRS (CaG)",
-            "MultiPRS (UKB)",
-            "MultiPRS (CaG)",
-            "Best Single Source PRS",
-            "Ancestry-matched PRS",
-        ],
-        height=4.5,
-        aspect=1.25,
-        palette={
-            "MoEPRS (UKB)": "#375E97",
-            "MoEPRS (CaG)": "#8CA8D8",
-            "MultiPRS (UKB)": "#FFBB00",
-            "MultiPRS (CaG)": "#FFE066",
-            "Best Single Source PRS": "#BC80BD",
-            "Ancestry-matched PRS": "#66C2A5",
-        },
-        test_models=("MoEPRS (UKB)", "MultiPRS (UKB)"),
-    )
+    phenotype_order = [
+        "Standing Height",
+        "Log Body Mass Index",
+        "Diastolic blood pressure",
+        "Systolic blood pressure",
+        "Type 2 Diabetes",
+        "Asthma",
+        "Log triglycerides",
+        "Log HDL Cholesterol",
+        "LDL Cholesterol",
+        "Total Cholesterol",
+    ]
 
-    # ---------------- Plot accuracy subpanels ----------------
+    for biobank in ("ukbb", "cartagene"):
+        bb_short = BIOBANK_NAME_MAP_SHORT[biobank]
+        metrics_df = extract_accuracy_data_all_phenotypes(
+            args.moe_model,
+            biobank,
+            exclude_analyses=["LDL_ADJ_MA", "TC_ADJ_MA", "DBP_ADJ_MA", "SBP_ADJ_MA"],
+        )
 
-    ukb_data = extract_accuracy_data("ukbb", evaluation_category="Coarse Ancestry")
-    cag_data = extract_accuracy_data("cartagene", evaluation_category="Coarse Ancestry")
+        metrics_df["Evaluation Group"] = (
+            "Samples of "
+            + metrics_df["Evaluation Group"].map(
+                {"EUR": "European", "non-EUR": "minority (non-EUR)"}
+            )
+            + f" ancestry in {BIOBANK_NAME_MAP_SHORT[biobank]}"
+        )
 
-    all_data = pd.concat([ukb_data, cag_data], axis=0).reset_index(drop=True)
+        g = plot_combined_accuracy_metrics(
+            metrics_df,
+            output_f=f"figures/section_2/{biobank}_metrics.eps",
+            x="Phenotype",
+            palette=palette,
+            order=phenotype_order,
+            hue_order=hue_order,
+            column=None,
+            row="Evaluation Group",
+            height=3,
+            aspect=4,
+            sharey=True,
+            test_models=[
+                (f"MoEPRS ({bb_short})", f"MultiPRS ({bb_short})"),
+                (f"MoEPRS ({bb_short})", "Best Single Source PRS"),
+            ],
+            significance_symbols=["*", "+"],
+            x_tick_rotation=90,
+        )
 
-    g = plot_combined_accuracy_metrics(
-        all_data,
-        output_f="figures/section_2/accuracy_subpanels_coarse_ancestry.eps",
-        col_order=["Standing Height (UKB)", "Standing Height (CaG)"],
-        hue_order=[
-            "MoEPRS (UKB)",
-            "MoEPRS (CaG)",
-            "MultiPRS (UKB)",
-            "MultiPRS (CaG)",
-            "Best Single Source PRS",
-            "Ancestry-matched PRS",
-        ],
-        height=4.5,
-        aspect=1.25,
-        palette={
-            "MoEPRS (UKB)": "#375E97",
-            "MoEPRS (CaG)": "#8CA8D8",
-            "MultiPRS (UKB)": "#FFBB00",
-            "MultiPRS (CaG)": "#FFE066",
-            "Best Single Source PRS": "#BC80BD",
-            "Ancestry-matched PRS": "#66C2A5",
-        },
-        test_models=("MoEPRS (UKB)", "MultiPRS (UKB)"),
-    )
+    # = = = = = = = = = = = = = = = = = = = = = = = =
 
-    # ----------------------------------------------------------------
-    # Evaluate on training data (sanity check):
+    for biobank in ("ukbb", "cartagene"):
+        bb_short = BIOBANK_NAME_MAP_SHORT[biobank]
+        weight_similarity = []
 
-    ukb_data = extract_accuracy_data("ukbb", dataset="train_data")
-    cag_data = extract_accuracy_data("cartagene", dataset="train_data")
+        for d in glob.glob(f"data/harmonized_data/*_MA/{biobank}"):
+            analysis_id = d.split("/")[-2]
 
-    all_data = pd.concat([ukb_data, cag_data], axis=0).reset_index(drop=True)
+            if "_ADJ_" in analysis_id:
+                continue
 
-    g = plot_combined_accuracy_metrics(
-        all_data,
-        output_f="figures/section_2/accuracy_subpanels_train.eps",
-        col_order=["Standing Height (UKB)", "Standing Height (CaG)"],
-        hue_order=[
-            "MoEPRS (UKB)",
-            "MoEPRS (CaG)",
-            "MultiPRS (UKB)",
-            "MultiPRS (CaG)",
-            "Best Single Source PRS",
-            "Ancestry-matched PRS",
-        ],
-        height=4.5,
-        aspect=1.25,
-        palette={
-            "MoEPRS (UKB)": "#375E97",
-            "MoEPRS (CaG)": "#8CA8D8",
-            "MultiPRS (UKB)": "#FFBB00",
-            "MultiPRS (CaG)": "#FFE066",
-            "Best Single Source PRS": "#BC80BD",
-            "Ancestry-matched PRS": "#66C2A5",
-        },
-        test_models=("MoEPRS (UKB)", "MultiPRS (UKB)"),
-    )
+            weight_similarity.append(
+                extract_mixing_weight_similarity(
+                    args.moe_model, analysis_id, biobank, metric=args.sim_metric
+                )
+            )
 
-    # ---------------- Plot accuracy subpanels ----------------
-    # Plot Pearson correlation metrics
-    ukb_data = extract_accuracy_data("ukbb", metric="CORR")
-    cag_data = extract_accuracy_data("cartagene", metric="CORR")
+        weight_similarity = pd.concat(weight_similarity)
 
-    all_data = pd.concat([ukb_data, cag_data], axis=0).reset_index(drop=True)
+        fig, ax = plt.subplots(figsize=(6.5, 2.9))
 
-    g = plot_combined_accuracy_metrics(
-        all_data,
-        output_f="figures/section_2/accuracy_subpanels_corr_test.eps",
-        col_order=["Standing Height (UKB)", "Standing Height (CaG)"],
-        hue_order=[
-            "MoEPRS (UKB)",
-            "MoEPRS (CaG)",
-            "MultiPRS (UKB)",
-            "MultiPRS (CaG)",
-            "Best Single Source PRS",
-            "Ancestry-matched PRS",
-        ],
-        metric="CORR",
-        height=4.5,
-        aspect=1.25,
-        palette={
-            "MoEPRS (UKB)": "#375E97",
-            "MoEPRS (CaG)": "#8CA8D8",
-            "MultiPRS (UKB)": "#FFBB00",
-            "MultiPRS (CaG)": "#FFE066",
-            "Best Single Source PRS": "#BC80BD",
-            "Ancestry-matched PRS": "#66C2A5",
-        },
-    )
+        sns.barplot(
+            data=weight_similarity,
+            x="Phenotype",
+            y="Similarity",
+            hue="Cohort",
+            order=phenotype_order,
+            hue_order=["All", "EUR", "non-EUR"],
+            palette={
+                "All": "#9FBAD6",  # light, desaturated blue
+                "EUR": "#5F7FA6",  # muted mid-blue
+                "non-EUR": "#CD9395",  # keep your terracotta
+            },
+            ax=ax,
+        )
 
-    ukb_data = extract_accuracy_data("ukbb", metric="CORR", dataset="train_data")
-    cag_data = extract_accuracy_data("cartagene", metric="CORR", dataset="train_data")
+        ax.set_ylabel(f"Mean {metric_name[args.sim_metric]}")
+        ax.tick_params(axis="x", labelrotation=90)
 
-    all_data = pd.concat([ukb_data, cag_data], axis=0).reset_index(drop=True)
+        ax.legend(
+            title="Test cohort",
+            bbox_to_anchor=(1.05, 0.5),  # (x, y)
+            loc="upper left",
+            borderaxespad=0,
+        )
 
-    g = plot_combined_accuracy_metrics(
-        all_data,
-        output_f="figures/section_2/accuracy_subpanels_corr_train.eps",
-        col_order=["Standing Height (UKB)", "Standing Height (CaG)"],
-        hue_order=[
-            "MoEPRS (UKB)",
-            "MoEPRS (CaG)",
-            "MultiPRS (UKB)",
-            "MultiPRS (CaG)",
-            "Best Single Source PRS",
-            "Ancestry-matched PRS",
-        ],
-        metric="CORR",
-        height=4.5,
-        aspect=1.25,
-        palette={
-            "MoEPRS (UKB)": "#375E97",
-            "MoEPRS (CaG)": "#8CA8D8",
-            "MultiPRS (UKB)": "#FFBB00",
-            "MultiPRS (CaG)": "#FFE066",
-            "Best Single Source PRS": "#BC80BD",
-            "Ancestry-matched PRS": "#66C2A5",
-        },
-    )
+        plt.title(
+            f"Concordance of mixing weights between\nCaG- and UKB-trained MoEPRS on {bb_short} samples"
+        )
+        plt.savefig(
+            f"figures/section_2/mixing_weight_sim_{biobank}_{args.sim_metric}.eps",
+            bbox_inches="tight",
+        )
+        plt.close()
 
     # ---------------- Plot PRS Mixture graphs ----------------
 
-    for biobank in ("ukbb", "cartagene"):
-        data_path = f"data/harmonized_data/HEIGHT/{biobank}/test_data.pkl"
-        model_path = (
-            f"data/trained_models/HEIGHT/{biobank}/train_data/{args.moe_model}.pkl"
-        )
+    for analysis_id in ANALYSIS_TO_PHENOTYPE_MAP.keys():
+        if (
+            ANALYSIS_TO_PHENOTYPE_MAP[analysis_id] not in phenotype_order
+            or "_MT" in analysis_id
+        ):
+            continue
 
-        p_dataset = PRSDataset.from_pickle(data_path)
-        moe_model = MoEPRS.from_saved_model(model_path)
+        for biobank in ("ukbb", "cartagene"):
+            data_path = f"data/harmonized_data/{analysis_id}/{biobank}/test_data.pkl"
+            model_path = f"data/trained_models/{analysis_id}/{biobank}/train_data/{args.moe_model}.pkl"
 
-        biobank_name = {"ukbb": "UKB", "cartagene": "CaG"}[biobank]
+            p_dataset = PRSDataset.from_pickle(data_path)
+            moe_model = MoEPRS.from_saved_model(model_path)
 
-        # Generate the admixture graphs:
-        plot_admixture_graphs(
-            p_dataset,
-            moe_model,
-            group_col="Ancestry",
-            title=f"PRS Mixture Graph for Standing Height ({biobank_name})",
-            output_file=f"figures/section_2/admixture_graphs_{biobank}.png",
-            subsample_within_groups=True,
-            agg_mechanism="sort",
-            figsize=(g.fig.get_size_inches()[0], 3.1),
-        )
-
-    # ---------------- Plot mixing weight comparison ----------------
-
-    sns.set_context("paper", font_scale=1.25)
-    plot_mixing_weight_comparison("ukbb")
-    plot_mixing_weight_comparison("cartagene")
-
-    sns.set_context("paper", font_scale=1.1)
-
-    plot_mixing_weight_comparison_quantitative()
-    plot_mixing_weight_comparison_quantitative("cartagene")
+            # Generate the admixture graphs:
+            plot_admixture_graphs(
+                p_dataset,
+                moe_model,
+                group_col="Ancestry",
+                title=f"PRS Mixture Graph for {ANALYSIS_TO_PHENOTYPE_MAP[analysis_id]} ({BIOBANK_NAME_MAP_SHORT[biobank]})",
+                output_file=f"figures/section_2/mixture_graphs_{analysis_id}_{biobank}.png",
+                subsample=True,
+                agg_mechanism="sort",
+                figsize=(g.fig.get_size_inches()[0], 3.1),
+            )
 
     # ---------------- Plot fine-grained admixture graphs ----------------
 
     # Plot the fine-grained admixture graphs for the MoE model:
 
     # First case: OTH ancestry group in UKB:
-    data_path = "data/harmonized_data/HEIGHT/ukbb/full_data.pkl"
-    model_path = f"data/trained_models/HEIGHT/ukbb/train_data/{args.moe_model}.pkl"
+    data_path = "data/harmonized_data/HEIGHT_MA/ukbb/full_data.pkl"
+    model_path = f"data/trained_models/HEIGHT_MA/ukbb/train_data/{args.moe_model}.pkl"
 
     p_dataset = PRSDataset.from_pickle(data_path)
 
@@ -637,7 +436,7 @@ if __name__ == "__main__":
         group_col="Fine-scale genetic cluster (UMAP+HDBSCAN)",
         title="PRS Mixture Graph\nUKB samples with unassigned ancestry (OTH)",
         output_file="figures/section_2/admixture_graphs_ukbb_OTH.png",
-        subsample_within_groups=True,
+        subsample=True,
         agg_mechanism="sort",
         sorted_groups=[
             "Levant",
@@ -655,8 +454,10 @@ if __name__ == "__main__":
 
     # ---------------------------------------------------
     # Second case: MID ancestry group in cartagene:
-    data_path = "data/harmonized_data/HEIGHT/cartagene/test_data.pkl"
-    model_path = f"data/trained_models/HEIGHT/cartagene/train_data/{args.moe_model}.pkl"
+    data_path = "data/harmonized_data/HEIGHT_MA/cartagene/test_data.pkl"
+    model_path = (
+        f"data/trained_models/HEIGHT_MA/cartagene/train_data/{args.moe_model}.pkl"
+    )
 
     p_dataset = PRSDataset.from_pickle(data_path)
     # Filter the samples to only include those with MID ancestry:
@@ -674,7 +475,7 @@ if __name__ == "__main__":
         group_col="Fine-scale genetic cluster (UMAP+HDBSCAN)",
         title="PRS Mixture Graph for Standing Height (CaG; Ancestry=MID)",
         output_file="figures/section_2/admixture_graphs_cartagene_MID.png",
-        subsample_within_groups=True,
+        subsample=True,
         agg_mechanism="sort",
         sorted_groups=["North Africa", "Levant"],
         min_group_size=30,
@@ -683,8 +484,8 @@ if __name__ == "__main__":
     )
 
     # Third case: MID ancestry group in UKB:
-    data_path = "data/harmonized_data/HEIGHT/ukbb/full_data.pkl"
-    model_path = f"data/trained_models/HEIGHT/ukbb/train_data/{args.moe_model}.pkl"
+    data_path = "data/harmonized_data/HEIGHT_MA/ukbb/full_data.pkl"
+    model_path = f"data/trained_models/HEIGHT_MA/ukbb/train_data/{args.moe_model}.pkl"
 
     p_dataset = PRSDataset.from_pickle(data_path)
 
@@ -713,7 +514,7 @@ if __name__ == "__main__":
         group_col="Fine-scale genetic cluster (UMAP+HDBSCAN)",
         title="PRS Mixture Graph for Standing Height (UKB; Ancestry=MID)",
         output_file="figures/section_2/admixture_graphs_ukbb_MID.png",
-        subsample_within_groups=True,
+        subsample=True,
         sorted_groups=["Africa", "Horn of Africa", "North Africa", "Levant"],
         agg_mechanism="sort",
         min_group_size=30,

@@ -15,19 +15,17 @@ sys.path.append(osp.join(parent_dir, "evaluation/"))
 
 from error_bars import add_error_bars
 from evaluate_predictive_performance import stratified_evaluation
-from moe import MoEPRS
 from plot_utils import (
     BIOBANK_NAME_MAP_SHORT,
     GROUP_MAP,
     MODEL_NAME_MAP,
-    PHENOTYPE_NAME_MAP,
     assign_models_consistent_colors,
 )
 from PRSDataset import PRSDataset
 
 
 def extract_stratified_evaluation_metrics(
-    pheno,
+    analysis_id,
     biobank,
     dataset="full_data",
     trained_models=None,
@@ -45,7 +43,7 @@ def extract_stratified_evaluation_metrics(
         category = [category]
 
     dat = PRSDataset.from_pickle(
-        f"data/harmonized_data/{pheno}/{biobank}/{dataset}.pkl"
+        f"data/harmonized_data/{analysis_id}/{biobank}/{dataset}.pkl"
     )
 
     # ------------------ Add information about genetic distance to Europeans -----------------------
@@ -111,7 +109,7 @@ def extract_stratified_evaluation_metrics(
         min_group_size=20,
     )
 
-    eval_df["PGS"] = eval_df["PGS"].map(lambda x: MODEL_NAME_MAP.get(x, x))
+    eval_df["PGS"] = eval_df["PGS"].map(lambda x: MODEL_NAME_MAP[analysis_id].get(x, x))
 
     return eval_df
 

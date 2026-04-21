@@ -23,7 +23,7 @@ GROUP_MAP = {"0": "Female", "1": "Male"}
 
 BIOBANK_NAME_MAP = {
     "ukbb": "UK Biobank",
-    "cartagene": "CARTaGENE",
+    "cartagene": "CARTaGENE Biobank",
 }
 
 BIOBANK_NAME_MAP_SHORT = {
@@ -33,58 +33,33 @@ BIOBANK_NAME_MAP_SHORT = {
 
 # --------------------------------------------------------
 
-glasbey50 = [
-    "#0000FF",
-    "#FF0000",
-    "#00FF00",
-    "#000033",
-    "#FF00B6",
-    "#005300",
-    "#FFD300",
-    "#009FFF",
-    "#9A4D42",
-    "#00FFBE",
-    "#783FC1",
-    "#1F9698",
-    "#FFACFD",
-    "#B1CC71",
-    "#F1085C",
-    "#FE8F42",
-    "#DD00FF",
-    "#201A01",
-    "#720055",
-    "#766C95",
-    "#02AD24",
-    "#C8FF00",
-    "#886C00",
-    "#FFB79F",
-    "#858567",
-    "#A10300",
-    "#14F9FF",
-    "#00479E",
-    "#DC5E93",
-    "#93D4FF",
-    "#004C47",
-    "#D5FF00",
-    "#FF8AD8",
-    "#00B5F7",
-    "#FF7F00",
-    "#6A826C",
-    "#00FF6F",
-    "#8F7C00",
-    "#A57BB8",
-    "#5900FF",
-    "#009BFF",
-    "#FFB167",
-    "#00FF9C",
-    "#B0006F",
-    "#AAFF00",
-    "#005F39",
-    "#A77B00",
-    "#FF5C00",
-    "#4BFF00",
-    "#3B5DFF",
-]
+PRS_NAME_COLOR_MAP = {
+    "T2D": "#FDB462",
+    "BMI": "#B3DE69",
+    "HbA1c": "#FFED6F",
+    "FG": "#66C2A5",
+    "TG": "#BC80BD",
+    "T1D": "#FCCDE5",
+    "HYPO": "#CAB2D6",
+    "CAD": "#80B1D3",
+    "LDL": "#FDBF6F",
+    "SBP": "#FCCDE5",
+    "SMK": "#D9D9D9",
+    "HTN": "#FDB462",
+    "DBP": "#C6DBEF",
+    "HF": "#FB8072",
+    "AF": "#BC80BD",
+    "HEIGHT": "#CCEBC5",
+    "STR": "#8DD3C7",
+    "STR_433": "#FFED6F",
+    "DEM": "#C6DBEF",
+    "EDU": "#9ADBE8",
+    "GOUT": "#E5C494",
+    "URATE": "#FFE082",
+    "ASTHMA": "#66C2A5",
+    "EOS": "#FFFFB3",
+    "ALLERGY": "#E78AC3",
+}
 
 # --------------------------------------------------------
 # Sorting lists:
@@ -191,15 +166,21 @@ def assign_models_consistent_colors(models, palette="Set3"):
     colors["Female"] = "#F98866"
     colors["MoEPRS"] = "#375E97"
     colors["MultiPRS"] = "#FFBB00"
+    colors.update(PRS_NAME_COLOR_MAP)
 
     all_unique_models = set(
         [v for inner in MODEL_NAME_MAP.values() for v in inner.values()]
     )
 
     remaining_models = sorted(list(all_unique_models - set(colors.keys())))
-    remaining_colors = glasbey50[: len(remaining_models)]
+    remaining_colors = sns.color_palette("husl", len(remaining_models))
 
     colors.update(dict(zip(remaining_models, remaining_colors)))
+
+    unknown_models = sorted(list(set(models) - set(colors.keys())))
+    if unknown_models:
+        unknown_colors = sns.color_palette("pastel", len(unknown_models))
+        colors.update(dict(zip(unknown_models, unknown_colors)))
 
     return {m: colors[m] for m in models}
 
@@ -288,6 +269,8 @@ def transform_eval_metrics(eval_df):
             result["Model Category"] = "MultiPRS"
         elif "AncestryWeightedPRS" in model_name:
             result["Model Category"] = "AncestryWeightedPRS"
+        elif "SexMatchedPRS" in model_name:
+            result["Model Category"] = "AttributePartitionedPRS"
         elif "Covariates" in model_name:
             result["Model Category"] = "Covariates"
         elif "Random" in model_name:

@@ -54,16 +54,16 @@ def postprocess_metrics_df(
     else:
         single_model_label = "SinglePRS"
 
+    model_cats = [
+        "MoE",
+        "MultiPRS",
+        "AncestryWeightedPRS",
+        "AttributePartitionedPRS",
+        single_model_label,
+    ]
+
     if metric in ("PR_AUC", "ROC_AUC", "MSE", "CORR"):
-        model_cats = [
-            "MoE",
-            "MultiPRS",
-            "AncestryWeightedPRS",
-            "Covariates",
-            single_model_label,
-        ]
-    else:
-        model_cats = ["MoE", "MultiPRS", "AncestryWeightedPRS", single_model_label]
+        model_cats.append("Covariates")
 
     sub_metrics_df = sub_metrics_df.loc[
         sub_metrics_df["Model Category"].isin(model_cats)

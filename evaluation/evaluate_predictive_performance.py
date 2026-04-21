@@ -21,7 +21,7 @@ sys.path.append(parent_dir)
 sys.path.append(osp.join(parent_dir, "model/"))
 sys.path.append(osp.join(parent_dir, "score/"))
 
-from baseline_models import AncestryWeightedPRS, MultiPRS
+from baseline_models import AncestryWeightedPRS, AttributePartitionedPRS, MultiPRS
 from eval_utils import (
     average_precision_at_top_percentile,
     generate_categorical_masks,
@@ -426,6 +426,8 @@ if __name__ == "__main__":
             trained_models[model_name] = MoEPRS.from_saved_model(f)
         elif "AncestryWeightedPRS" in model_name:
             trained_models[model_name] = AncestryWeightedPRS.from_saved_model(f)
+        elif "SexMatchedPRS" in model_name:
+            trained_models[model_name] = AttributePartitionedPRS.from_saved_model(f)
         else:
             trained_models[model_name] = MultiPRS.from_saved_model(f)
 

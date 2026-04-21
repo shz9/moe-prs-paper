@@ -3,15 +3,41 @@ import pandas as pd
 from viprs.eval.eval_utils import fit_linear_model
 
 
+def rowwise_cosine_similarity(X, Y, eps=1e-12):
+    """
+    Compute cosine similarity row-wise between two matrices.
+
+    Parameters
+    ----------
+    X : array-like of shape (n_samples, n_components)
+    Y : array-like of shape (n_samples, n_components)
+    eps : float
+        Small constant to avoid division by zero.
+
+    Returns
+    -------
+    np.ndarray of shape (n_samples,)
+        Cosine similarity for each row.
+    """
+    X = np.asarray(X, dtype=float)
+    Y = np.asarray(Y, dtype=float)
+
+    if X.shape != Y.shape:
+        raise ValueError(f"Shape mismatch: {X.shape} vs {Y.shape}")
+
+    X_norm = np.linalg.norm(X, axis=1)
+    Y_norm = np.linalg.norm(Y, axis=1)
+
+    denom = np.clip(X_norm * Y_norm, eps, None)
+    return np.sum(X * Y, axis=1) / denom
+
+
 def generate_predictions(prs_dataset, models, use_only_prs=True):
     preds = {}
 
     for m_name, m in models.items():
-        if use_only_prs and getattr(m, "expert_cols", None) is not None:
-            if hasattr(m, "predict_prs"):
-                preds[m_name] = m.predict_prs(prs_dataset).flatten()
-            else:
-                preds[m_name] = m.predict(prs_dataset).flatten()
+        if use_only_prs and hasattr(m, "predict_prs"):
+            preds[m_name] = m.predict_prs(prs_dataset).flatten()
         else:
             preds[m_name] = m.predict(prs_dataset).flatten()
 

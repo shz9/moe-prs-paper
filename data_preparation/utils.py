@@ -1,6 +1,3 @@
-import pandas as pd
-
-
 def liftover_coordinates(
     dataframe,
     chr_col="CHR",

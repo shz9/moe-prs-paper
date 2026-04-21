@@ -12,6 +12,7 @@ import pandas as pd
 import psutil
 import torch
 from moe_pytorch import Lit_MoEPRS
+from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader
 
 
@@ -125,6 +126,57 @@ class PeakMemory:
     @property
     def peak_cuda_alloc_gb(self) -> float:
         return self.peak_cuda_alloc_bytes / (1024**3)
+
+
+def subset_standard_scaler(scaler, keep_features):
+    """
+    Subset a fitted StandardScaler using feature names stored in
+    scaler.feature_names_in_.
+
+    Parameters
+    ----------
+    scaler : fitted StandardScaler
+    keep_features : list of str
+        Features to retain (must be in scaler.feature_names_in_)
+
+    Returns
+    -------
+    new_scaler : StandardScaler
+    indices : np.ndarray
+        Indices corresponding to kept features
+    """
+    if not hasattr(scaler, "feature_names_in_"):
+        raise ValueError(
+            "Scaler does not have feature_names_in_. "
+            "Was it fitted on a pandas DataFrame?"
+        )
+
+    feature_names = list(scaler.feature_names_in_)
+
+    # Map names → indices
+    name_to_idx = {name: i for i, name in enumerate(feature_names)}
+
+    missing = set(keep_features) - set(feature_names)
+    if missing:
+        raise ValueError(f"Features not found in scaler: {missing}")
+
+    indices = np.array([name_to_idx[f] for f in keep_features])
+
+    # Create new scaler
+    new_scaler = StandardScaler()
+
+    # Copy learned parameters
+    new_scaler.mean_ = scaler.mean_[indices]
+    new_scaler.scale_ = scaler.scale_[indices]
+
+    if hasattr(scaler, "var_"):
+        new_scaler.var_ = scaler.var_[indices]
+
+    new_scaler.n_features_in_ = len(indices)
+
+    new_scaler.feature_names_in_ = np.array(keep_features)
+
+    return new_scaler
 
 
 def compare_scalers(scaler1, scaler2):
