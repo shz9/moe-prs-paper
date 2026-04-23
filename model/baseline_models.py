@@ -240,7 +240,7 @@ class MultiPRS(object):
         assert self.input_data is not None
         assert self.phenotype is not None
 
-        self.reg_model = self.reg_model.fit(self.input_data, self.phenotype)
+        self.reg_model = self.reg_model.fit(self.input_data, self.phenotype.ravel())
 
         return self
 
@@ -675,7 +675,7 @@ class AncestryWeightedPRS(object):
         if self.weighing_scheme == "before":
             keep = self.input_data["keep_samples"]
             self.reg_model = self.reg_model.fit(
-                self.input_data["data"][keep], self.phenotype[keep]
+                self.input_data["data"][keep], self.phenotype[keep].ravel()
             )
         else:
             for anc, dat in self.input_data.items():
@@ -683,7 +683,7 @@ class AncestryWeightedPRS(object):
                 # fit with sample weights for this ancestry
                 self.reg_model[anc] = self.reg_model[anc].fit(
                     dat["data"][keep],
-                    self.phenotype[keep],
+                    self.phenotype[keep].ravel(),
                     sample_weight=dat["weights"][keep],
                 )
 
@@ -928,7 +928,7 @@ class AttributePartitionedPRS(object):
             keep = dat["keep_samples"]
             self.reg_model[val].fit(
                 dat["data"][keep],
-                self.phenotype[keep],
+                self.phenotype[keep].ravel(),
             )
 
         return self

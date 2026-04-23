@@ -1,6 +1,10 @@
 #!/bin/bash
 
-pgs_pheno_files=("tables/phenotype_prs_table.csv" "tables/multitrait_prs_table.csv")
+pgs_pheno_files=(
+    "tables/multi_ancestry_prs_table.csv"
+    "tables/sex_biased_prs_table.csv"
+    "tables/multitrait_prs_table.csv"
+)
 biobanks=("ukbb" "cartagene")
 prop_test=0.3  # Proportion of samples to use for testing
 

@@ -11,7 +11,7 @@ sys.path.append(osp.dirname(osp.dirname(osp.dirname(__file__))))
 
 from baseline_models import AncestryWeightedPRS, AttributePartitionedPRS, MultiPRS
 from grid_search import custom_cv_grid_search, get_gate_penalty_ladder
-from model_utils import Timer, get_model_name_mapper
+from model_utils import Timer, get_analysis_to_table_mapper, get_model_name_mapper
 from moe import MoEPRS
 from moe_pytorch import Lit_MoEPRS, make_deterministic, train_model
 from PRSDataset import PRSDataset
@@ -47,10 +47,16 @@ def train_baseline_linear_models(
     # -------------------------------------------------
     # Determine if we should run the AncestryWeightedPRS model:
 
-    if dataset.analysis_id.endswith("_MA"):
+    analysis_to_table = get_analysis_to_table_mapper()
+    analysis_table_id = analysis_to_table.get(dataset.analysis_id)
+
+    if analysis_table_id == "multi_ancestry_prs_table":
         # First, map the model names to their corresponding training cohort:
         MODEL_NAME_MAP = get_model_name_mapper()
-        model_names = {m: MODEL_NAME_MAP[analysis_id][m] for m in dataset.prs_cols}
+        model_names = {
+            m: MODEL_NAME_MAP.get(dataset.analysis_id, {}).get(m, m)
+            for m in dataset.prs_cols
+        }
 
         # If we have at least two models whose names overlaps with
         # ancestry labels in the dataset, then run the AncestryWeightedPRS model:
@@ -81,7 +87,7 @@ def train_baseline_linear_models(
     # -------------------------------------------------
     # Determine if we should run the sex-matched PRS model:
 
-    if dataset.analysis_id.endswith("_SEX"):
+    if analysis_table_id == "sex_biased_prs_table":
         attribute_to_score_map = {}
 
         for pid in dataset.prs_cols:
@@ -140,8 +146,14 @@ def train_moe_model_numpy(dataset):
     # -----------------------------------------
     # Gating model input:
 
+    analysis_to_table = get_analysis_to_table_mapper()
+    analysis_table_id = analysis_to_table.get(dataset.analysis_id)
+    use_prs_in_gate = args.add_prs_to_gate or (
+        analysis_table_id == "multitrait_prs_table"
+    )
+
     gate_input = list(dataset.covariates_cols)
-    if args.add_prs_to_gate:
+    if use_prs_in_gate:
         gate_input += list(dataset.prs_cols)
 
     # -----------------------------------------

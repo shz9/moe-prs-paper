@@ -1,0 +1,9 @@
+AnalysisID,Phenotype,Phenotype_short,PhenotypeID,PGS,PGSCatalog_ID,PGS_Name,Notes
+LOG_TST_SEX,Log Testosterone,LOG_TST,"EFO_0004908",PGS_TST_M,,Male,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+LOG_TST_SEX,Log Testosterone,LOG_TST,"EFO_0004908",PGS_TST_F,,Female,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+URT_SEX,Urate,URT,"EFO_0004531",PGS_URT_M,,Male,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+URT_SEX,Urate,URT,"EFO_0004531",PGS_URT_F,,Female,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+LOG_CRTN_SEX,Log Creatinine,LOG_CRTN,"EFO_0004518",PGS_CRTN_M,,Male,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+LOG_CRTN_SEX,Log Creatinine,LOG_CRTN,"EFO_0004518",PGS_CRTN_F,,Female,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+WHR_SEX,Waist-hip ratio,WHR,"EFO_0004343",PGS_WHR_M,,Male,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"
+WHR_SEX,Waist-hip ratio,WHR,"EFO_0004343",PGS_WHR_F,,Female,"PRS Inference using VIPRS. Sumstats from: https://zenodo.org/records/7222725"

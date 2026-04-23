@@ -44,6 +44,157 @@ def generate_predictions(prs_dataset, models, use_only_prs=True):
     return pd.DataFrame(preds)
 
 
+def subsample_to_prevalence(
+    prs_dataset,
+    desired_prevalence,
+    mask=None,
+    random_state=None,
+    return_info=False,
+):
+    """
+    Subsample individuals to match a target case prevalence for binary phenotypes.
+
+    Parameters
+    ----------
+    prs_dataset : PRSDataset
+        Dataset containing phenotype values.
+    desired_prevalence : float
+        Target prevalence in [0, 1].
+    mask : array-like, optional
+        Optional eligible-sample selector. Can be:
+        - boolean array of length prs_dataset.N
+        - integer index array
+        If None, all samples are eligible.
+    random_state : int, optional
+        Seed for reproducible sampling.
+    return_info : bool, default=False
+        If True, also return a summary dictionary.
+
+    Returns
+    -------
+    sampled_mask : np.ndarray of shape (N,), dtype=bool
+        Boolean mask indicating sampled individuals.
+    info : dict, optional
+        Returned only when return_info=True.
+    """
+
+    if prs_dataset.phenotype_likelihood != "binomial":
+        raise ValueError(
+            "subsample_to_prevalence requires a binomial phenotype likelihood."
+        )
+
+    desired_prevalence = float(desired_prevalence)
+    if not (0.0 <= desired_prevalence <= 1.0):
+        raise ValueError("desired_prevalence must be in [0, 1].")
+
+    N = prs_dataset.N
+    prs_dataset.set_backend("numpy")
+    y = np.asarray(prs_dataset.get_phenotype()).reshape(-1)
+    if y.shape[0] != N:
+        raise ValueError(f"Phenotype length mismatch: expected {N}, got {y.shape[0]}.")
+
+    if mask is None:
+        eligible = np.ones(N, dtype=bool)
+    else:
+        mask_arr = np.asarray(mask)
+        if mask_arr.dtype == bool:
+            if mask_arr.shape[0] != N:
+                raise ValueError(
+                    f"Boolean mask length mismatch: expected {N}, got {mask_arr.shape[0]}."
+                )
+            eligible = mask_arr.copy()
+        else:
+            eligible = np.zeros(N, dtype=bool)
+            idx = mask_arr.astype(int).reshape(-1)
+            if np.any((idx < 0) | (idx >= N)):
+                raise ValueError("Index mask contains out-of-range values.")
+            eligible[idx] = True
+
+    # Exclude missing phenotype values.
+    eligible = eligible & (~pd.isna(y))
+    y_eligible = y[eligible]
+    uniq = np.unique(y_eligible)
+    if not set(uniq).issubset({0, 1, 0.0, 1.0, False, True}):
+        raise ValueError(
+            "Phenotype values in eligible set must be binary (0/1) for this utility."
+        )
+
+    eligible_idx = np.where(eligible)[0]
+    case_idx = eligible_idx[y_eligible.astype(float) == 1.0]
+    control_idx = eligible_idx[y_eligible.astype(float) == 0.0]
+
+    n_cases = int(case_idx.shape[0])
+    n_controls = int(control_idx.shape[0])
+    if n_cases + n_controls == 0:
+        raise ValueError("No eligible samples after applying mask and missingness filter.")
+
+    if desired_prevalence in (0.0, 1.0):
+        n_case_keep = n_cases if desired_prevalence == 1.0 else 0
+        n_ctrl_keep = n_controls if desired_prevalence == 0.0 else 0
+    else:
+        if n_cases == 0 or n_controls == 0:
+            raise ValueError(
+                "Cannot achieve prevalence in (0, 1) when only one class is present."
+            )
+
+        # Maximize retained sample size under downsampling-only constraints.
+        if (n_cases / desired_prevalence) <= (n_controls / (1.0 - desired_prevalence)):
+            n_case_keep = n_cases
+            n_ctrl_keep = int(
+                np.floor(n_case_keep * (1.0 - desired_prevalence) / desired_prevalence)
+            )
+        else:
+            n_ctrl_keep = n_controls
+            n_case_keep = int(
+                np.floor(n_ctrl_keep * desired_prevalence / (1.0 - desired_prevalence))
+            )
+
+        n_case_keep = min(n_case_keep, n_cases)
+        n_ctrl_keep = min(n_ctrl_keep, n_controls)
+
+        if n_case_keep + n_ctrl_keep == 0:
+            raise ValueError(
+                "No samples selected. Try a different desired_prevalence or eligibility mask."
+            )
+
+    rng = np.random.default_rng(random_state)
+    sampled_case_idx = (
+        rng.choice(case_idx, size=n_case_keep, replace=False)
+        if n_case_keep > 0
+        else np.array([], dtype=int)
+    )
+    sampled_ctrl_idx = (
+        rng.choice(control_idx, size=n_ctrl_keep, replace=False)
+        if n_ctrl_keep > 0
+        else np.array([], dtype=int)
+    )
+
+    sampled_mask = np.zeros(N, dtype=bool)
+    sampled_mask[sampled_case_idx] = True
+    sampled_mask[sampled_ctrl_idx] = True
+
+    if not return_info:
+        return sampled_mask
+
+    n_keep = int(sampled_mask.sum())
+    achieved_prev = (
+        float(n_case_keep / n_keep)
+        if n_keep > 0
+        else np.nan
+    )
+    info = {
+        "desired_prevalence": desired_prevalence,
+        "achieved_prevalence": achieved_prev,
+        "n_eligible": int(eligible.sum()),
+        "n_cases_eligible": n_cases,
+        "n_controls_eligible": n_controls,
+        "n_cases_sampled": int(n_case_keep),
+        "n_controls_sampled": int(n_ctrl_keep),
+        "n_sampled": n_keep,
+    }
+    return sampled_mask, info
+
+
 def generate_pc_cluster_masks(prs_dataset, reference="median", n_clusters=5):
     """
     Cluster samples based on their distance in Principal Component space from

@@ -21,6 +21,7 @@ from moe import MoEPRS
 from plot_pgs_admixture import plot_admixture_graphs
 from plot_predictive_performance import postprocess_metrics_df
 from plot_utils import (
+    ANALYSIS_TO_TABLE_MAP,
     ANALYSIS_TO_PHENOTYPE_MAP,
     BIOBANK_NAME_MAP_SHORT,
     read_eval_metrics,
@@ -33,15 +34,17 @@ def extract_accuracy_data_all_phenotypes(
     moe_model_name,
     biobank,
     dataset="test_data",
-    analysis_category="MA",
+    analysis_table_id="multi_ancestry_prs_table",
     keep_analyses=None,
     exclude_analyses=None,
     exclude_all=True,
 ):
     analysis_results = []
 
-    for d in glob.glob(f"data/harmonized_data/*_{analysis_category}/{biobank}"):
+    for d in glob.glob(f"data/harmonized_data/*/{biobank}"):
         analysis_id = d.split("/")[-2]
+        if ANALYSIS_TO_TABLE_MAP.get(analysis_id) != analysis_table_id:
+            continue
 
         if keep_analyses is not None:
             if analysis_id not in keep_analyses:
@@ -314,8 +317,10 @@ if __name__ == "__main__":
         bb_short = BIOBANK_NAME_MAP_SHORT[biobank]
         weight_similarity = []
 
-        for d in glob.glob(f"data/harmonized_data/*_MA/{biobank}"):
+        for d in glob.glob(f"data/harmonized_data/*/{biobank}"):
             analysis_id = d.split("/")[-2]
+            if ANALYSIS_TO_TABLE_MAP.get(analysis_id) != "multi_ancestry_prs_table":
+                continue
 
             if "_ADJ_" in analysis_id:
                 continue
@@ -368,8 +373,8 @@ if __name__ == "__main__":
 
     for analysis_id in ANALYSIS_TO_PHENOTYPE_MAP.keys():
         if (
-            ANALYSIS_TO_PHENOTYPE_MAP[analysis_id] not in phenotype_order
-            or "_MT" in analysis_id
+            ANALYSIS_TO_PHENOTYPE_MAP.get(analysis_id, analysis_id) not in phenotype_order
+            or ANALYSIS_TO_TABLE_MAP.get(analysis_id) == "multitrait_prs_table"
         ):
             continue
 

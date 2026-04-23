@@ -25,6 +25,7 @@ from moe import MoEPRS
 from plot_pgs_admixture import plot_admixture_graphs
 from plot_stratified_prediction_accuracy import extract_stratified_evaluation_metrics
 from plot_utils import (
+    ANALYSIS_TO_TABLE_MAP,
     ANALYSIS_TO_PHENOTYPE_MAP,
     BIOBANK_NAME_MAP_SHORT,
     MODEL_NAME_MAP,
@@ -233,9 +234,15 @@ def extract_mixing_weight_similarity_across_analyses(
     ref_analysis="HEIGHT_MA",
     metric="cosine",  # "cosine" or "jsd"
 ):
-    unique_analysis = glob.glob(
-        f"data/trained_models/*_MA/{biobank}/train_data/{moe_model_name}.pkl"
-    )
+    unique_analysis = []
+    for analysis_id, table_id in ANALYSIS_TO_TABLE_MAP.items():
+        if table_id != "multi_ancestry_prs_table":
+            continue
+        model_f = (
+            f"data/trained_models/{analysis_id}/{biobank}/train_data/{moe_model_name}.pkl"
+        )
+        if osp.exists(model_f):
+            unique_analysis.append(model_f)
 
     unique_analysis.append("Ancestry classifier")
 

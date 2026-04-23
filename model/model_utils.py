@@ -342,6 +342,32 @@ def get_analysis_tables():
     return tabs
 
 
+@lru_cache(maxsize=None)
+def get_analysis_to_table_mapper():
+    """
+    Map each AnalysisID to the metadata table filename (without extension)
+    where that AnalysisID is defined.
+    """
+    mapper = {}
+
+    for table_name, df in get_analysis_tables().items():
+        if "AnalysisID" not in df.columns:
+            continue
+
+        table_id = osp.splitext(table_name)[0]
+        for analysis_id in df["AnalysisID"].dropna().astype(str).unique():
+            mapper[analysis_id] = table_id
+
+    return mapper
+
+
+def get_analysis_ids_for_table(table_id):
+    table_id = str(table_id)
+    return sorted(
+        [a for a, t in get_analysis_to_table_mapper().items() if t == table_id]
+    )
+
+
 def get_model_name_mapper():
     """
     Get a mapping between model ID and model name for

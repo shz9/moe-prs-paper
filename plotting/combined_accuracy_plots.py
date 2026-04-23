@@ -8,7 +8,12 @@ import seaborn as sns
 from error_bars import add_error_bars_to_catplot
 from magenpy.utils.system_utils import makedir
 from plot_predictive_performance import generate_model_colors, postprocess_metrics_df
-from plot_utils import read_eval_metrics, sort_groups, transform_eval_metrics
+from plot_utils import (
+    ANALYSIS_TO_TABLE_MAP,
+    read_eval_metrics,
+    sort_groups,
+    transform_eval_metrics,
+)
 from significance_annotation import add_significance_annotations
 
 # ---------------------------------------------------------------------------
@@ -201,10 +206,12 @@ if __name__ == "__main__":
     for f in glob.glob(f"data/evaluation/*/{args.biobank}/{args.dataset}_data.csv"):
         analysis_id = f.split("/")[-3]
 
-        analysis_category = analysis_id.split("_")[-1]
+        analysis_table_id = ANALYSIS_TO_TABLE_MAP.get(analysis_id)
+        if analysis_table_id is None:
+            continue
 
         # Determine stratification variable for evaluation:
-        if analysis_category == "SEX":
+        if analysis_table_id == "sex_biased_prs_table":
             strat_var = ["Sex"]
         else:
             strat_var = ["Ancestry", "Coarse Ancestry"]
@@ -235,7 +242,7 @@ if __name__ == "__main__":
                 aggregate_single_prs=args.aggregate_single_prs,
             )
 
-            metric_cat = f"{analysis_category}_{eval_cat}"
+            metric_cat = f"{analysis_table_id}_{eval_cat}"
 
             if metric_cat not in metrics_dfs:
                 metrics_dfs[metric_cat] = [eval_df]

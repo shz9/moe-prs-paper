@@ -1,6 +1,7 @@
 import argparse
 import os.path as osp
 import sys
+from functools import lru_cache
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -13,14 +14,16 @@ sys.path.append(parent_dir)
 sys.path.append(osp.join(parent_dir, "model/"))
 sys.path.append(osp.join(parent_dir, "evaluation/"))
 
+from baseline_models import MultiPRS
 from combined_accuracy_plots import plot_combined_accuracy_metrics
 from error_bars import add_error_bars
-from eval_utils import generate_predictions
+from eval_utils import generate_predictions, subsample_to_prevalence
 from evaluate_predictive_performance import evaluate_prs_models, stratified_evaluation
 from moe import GroupMeanWeightedPRS, MoEPRS
 from plot_pgs_admixture import plot_admixture_graphs
 from plot_stratified_prediction_accuracy import extract_stratified_evaluation_metrics
 from plot_utils import (
+    ANALYSIS_TO_TABLE_MAP,
     ANALYSIS_TO_PHENOTYPE_MAP,
     ANALYSIS_TO_SHORT_PHENOTYPE_MAP,
     BIOBANK_NAME_MAP,
@@ -32,6 +35,235 @@ from PRSDataset import PRSDataset
 from section_2_figures import extract_accuracy_data_all_phenotypes
 
 # -----------------------------------------------------------------------------------------
+
+DEFAULT_MT_TABLE = osp.join(parent_dir, "tables", "multitrait_prs_table.csv")
+DEFAULT_DISEASE_FLAG_COL = "Is_Disease_Matched"
+
+
+def _as_bool_mask(x):
+    return (
+        x.astype(str)
+        .str.strip()
+        .str.lower()
+        .isin({"1", "true", "t", "yes", "y"})
+    )
+
+
+@lru_cache(maxsize=1)
+def _load_mt_disease_prs_map(
+    table_path=DEFAULT_MT_TABLE, disease_flag_col=DEFAULT_DISEASE_FLAG_COL
+):
+    if not osp.exists(table_path):
+        return {}
+
+    df = pd.read_csv(table_path)
+    required_cols = {"AnalysisID", "PGS", disease_flag_col}
+    if not required_cols.issubset(df.columns):
+        return {}
+
+    disease_df = df.loc[_as_bool_mask(df[disease_flag_col]), ["AnalysisID", "PGS"]].copy()
+    if disease_df.empty:
+        return {}
+
+    # Keep first if multiple are flagged for a given analysis.
+    disease_df = disease_df.drop_duplicates("AnalysisID", keep="first")
+    return dict(zip(disease_df["AnalysisID"], disease_df["PGS"]))
+
+
+def _get_disease_prs_name(analysis_id):
+    mt_map = _load_mt_disease_prs_map()
+    if analysis_id in mt_map:
+        return str(mt_map[analysis_id])
+    return ANALYSIS_TO_SHORT_PHENOTYPE_MAP[analysis_id]
+
+
+def _parse_threshold_rule(rule_text):
+    rule = str(rule_text).replace(" ", "")
+    for op in ("<=", ">=", "<", ">", "=="):
+        if rule.startswith(op):
+            try:
+                val = float(rule[len(op) :])
+            except ValueError as e:
+                raise ValueError(
+                    f"Invalid threshold rule '{rule_text}'. "
+                    "Expected forms like '<=0.1', '>0.5', '==0.2'."
+                ) from e
+            return op, val, rule
+
+    raise ValueError(
+        f"Invalid threshold rule '{rule_text}'. "
+        "Expected forms like '<=0.1', '>0.5', '==0.2'."
+    )
+
+
+def _eval_threshold_rule(op, val, arr):
+    if op == "<=":
+        return arr <= val
+    if op == ">=":
+        return arr >= val
+    if op == "<":
+        return arr < val
+    if op == ">":
+        return arr > val
+    if op == "==":
+        return arr == val
+    raise ValueError(f"Unsupported operator: {op}")
+
+
+def _compact_mixing_group_label(label, disease_prs_name):
+    if label == "All":
+        return "All"
+
+    prefix = f"P({disease_prs_name})"
+    if not str(label).startswith(prefix):
+        return label
+
+    expr = str(label)[len(prefix) :].replace(" ", "")
+    for op in ("<=", ">=", "<", ">", "=="):
+        if expr.startswith(op):
+            rhs = expr[len(op) :]
+            op_tex = {
+                "<=": r"\leq",
+                ">=": r"\geq",
+                "<": "<",
+                ">": ">",
+                "==": "=",
+            }[op]
+            return rf"${op_tex} {rhs}$"
+    return label
+
+
+def _build_mixing_groups_from_moe(
+    prs_dataset,
+    moe_model,
+    analysis_id,
+    disease_prs_name=None,
+    partition_method="threshold",
+    threshold=0.5,
+    threshold_rules=None,
+    n_quantiles=4,
+):
+    """
+    Central utility for constructing disease-mixing groups from MoE probabilities.
+
+    Returns a dict with:
+    - disease_prs_name
+    - disease_expert_idx
+    - group_col
+    - group_levels (without "All")
+    - group_order (with "All")
+    - group_masks (independent boolean masks by group label)
+    - group_short_map / short_order (plot-friendly labels)
+    """
+
+    if disease_prs_name is None:
+        disease_prs_name = _get_disease_prs_name(analysis_id)
+
+    mapped_expert_names = [
+        MODEL_NAME_MAP[analysis_id].get(prs_id, prs_id)
+        for prs_id in moe_model.expert_cols
+    ]
+    if disease_prs_name not in mapped_expert_names:
+        raise ValueError(
+            f"Could not find disease PRS '{disease_prs_name}' among experts for {analysis_id}. "
+            f"Available experts: {mapped_expert_names}"
+        )
+
+    disease_expert_idx = mapped_expert_names.index(disease_prs_name)
+
+    mixing_proba = np.asarray(moe_model.predict_proba(prs_dataset), dtype=float)
+    if mixing_proba.ndim != 2 or mixing_proba.shape[1] <= disease_expert_idx:
+        raise ValueError(
+            f"Unexpected MoE probability matrix shape: {mixing_proba.shape}. "
+            f"Expected 2D with at least {disease_expert_idx + 1} columns."
+        )
+
+    prs_dataset.data["DiseasePRS_MixingProb"] = mixing_proba[:, disease_expert_idx]
+    probs = prs_dataset.data["DiseasePRS_MixingProb"].values.astype(float)
+
+    group_masks = {}
+
+    if partition_method == "threshold":
+        group_col = f"P({disease_prs_name}) threshold group"
+
+        if threshold_rules is None:
+            threshold = float(threshold)
+            threshold_str = f"{threshold:g}"
+            low_label = f"P({disease_prs_name})<={threshold_str}"
+            high_label = f"P({disease_prs_name})>{threshold_str}"
+            group_levels = [low_label, high_label]
+            prs_dataset.data[group_col] = np.where(
+                probs > threshold, high_label, low_label
+            )
+            group_masks = {
+                low_label: probs <= threshold,
+                high_label: probs > threshold,
+            }
+        else:
+            if isinstance(threshold_rules, str):
+                threshold_rules = [threshold_rules]
+            if len(threshold_rules) == 0:
+                raise ValueError("threshold_rules cannot be empty.")
+
+            parsed_rules = [_parse_threshold_rule(r) for r in threshold_rules]
+            group_levels = [
+                f"P({disease_prs_name}){rule}" for _, _, rule in parsed_rules
+            ]
+
+            # Deterministic single assignment for models that require a unique group label.
+            assigned = np.zeros(prs_dataset.N, dtype=bool)
+            groups = np.full(prs_dataset.N, "", dtype=object)
+            for (op, val, _), group_label in zip(parsed_rules, group_levels):
+                msk = _eval_threshold_rule(op, val, probs)
+                group_masks[group_label] = msk  # independent masks (can overlap)
+                assign_msk = msk & (~assigned)
+                groups[assign_msk] = group_label
+                assigned |= assign_msk
+
+            groups[~assigned] = f"P({disease_prs_name})_UNMATCHED"
+            prs_dataset.data[group_col] = groups
+
+    elif partition_method in {"quartile", "quantile"}:
+        n_quantiles = int(n_quantiles)
+        if n_quantiles < 2:
+            raise ValueError(
+                "n_quantiles must be >= 2 when using quartile/quantile partitioning."
+            )
+
+        group_col = f"P({disease_prs_name}) quantile"
+        group_levels = [f"Q{i + 1}" for i in range(n_quantiles)]
+        quant_groups = pd.qcut(
+            prs_dataset.data["DiseasePRS_MixingProb"].rank(method="first"),
+            q=n_quantiles,
+            labels=group_levels,
+        ).astype(str)
+        prs_dataset.data[group_col] = quant_groups.values
+        for g in group_levels:
+            group_masks[g] = quant_groups.values == g
+    else:
+        raise ValueError(
+            "partition_method must be one of {'threshold', 'quartile', 'quantile'}."
+        )
+
+    group_order = ["All"] + list(group_levels)
+    if partition_method == "threshold":
+        group_short_map = {
+            g: _compact_mixing_group_label(g, disease_prs_name) for g in group_order
+        }
+    else:
+        group_short_map = {g: g for g in group_order}
+    short_order = [group_short_map[g] for g in group_order]
+
+    return {
+        "disease_prs_name": disease_prs_name,
+        "disease_expert_idx": disease_expert_idx,
+        "group_col": group_col,
+        "group_levels": list(group_levels),
+        "group_order": group_order,
+        "group_masks": group_masks,
+        "group_short_map": group_short_map,
+        "short_order": short_order,
+    }
 
 
 def extract_disease_mixing_quartile_metrics(
@@ -80,122 +312,27 @@ def extract_disease_mixing_quartile_metrics(
         f"data/trained_models/{analysis_id}/ukbb/train_data/{moe_model_name}.pkl"
     )
 
-    if disease_prs_name is None:
-        disease_prs_name = ANALYSIS_TO_SHORT_PHENOTYPE_MAP[analysis_id]
-    mapped_expert_names = [
-        MODEL_NAME_MAP[analysis_id].get(prs_id, prs_id)
-        for prs_id in ukb_moe.expert_cols
-    ]
+    grouping = _build_mixing_groups_from_moe(
+        dat,
+        ukb_moe,
+        analysis_id=analysis_id,
+        disease_prs_name=disease_prs_name,
+        partition_method=partition_method,
+        threshold=threshold,
+        threshold_rules=threshold_rules,
+        n_quantiles=n_quantiles,
+    )
+    disease_prs_name = grouping["disease_prs_name"]
+    disease_expert_idx = grouping["disease_expert_idx"]
+    group_col = grouping["group_col"]
+    group_levels = grouping["group_levels"]
 
-    if disease_prs_name not in mapped_expert_names:
-        raise ValueError(
-            f"Could not find disease PRS '{disease_prs_name}' among experts for {analysis_id}. "
-            f"Available experts: {mapped_expert_names}"
-        )
-
-    disease_expert_idx = mapped_expert_names.index(disease_prs_name)
-
-    mixing_proba = np.asarray(ukb_moe.predict_proba(dat), dtype=float)
-    if mixing_proba.ndim != 2 or mixing_proba.shape[1] <= disease_expert_idx:
-        raise ValueError(
-            f"Unexpected MoE probability matrix shape: {mixing_proba.shape}. "
-            f"Expected 2D with at least {disease_expert_idx + 1} columns."
-        )
-
-    dat.data["DiseasePRS_MixingProb"] = mixing_proba[:, disease_expert_idx]
-
-    parsed_rules = []
-    rule_masks = {}
-    if partition_method == "threshold":
-        probs = dat.data["DiseasePRS_MixingProb"].values.astype(float)
-        group_col = f"P({disease_prs_name}) threshold group"
-
-        def parse_threshold_rule(rule_text):
-            rule = str(rule_text).replace(" ", "")
-            for op in ("<=", ">=", "<", ">", "=="):
-                if rule.startswith(op):
-                    try:
-                        val = float(rule[len(op) :])
-                    except ValueError as e:
-                        raise ValueError(
-                            f"Invalid threshold rule '{rule_text}'. "
-                            "Expected forms like '<=0.1', '>0.5', '==0.2'."
-                        ) from e
-                    return op, val, rule
-            raise ValueError(
-                f"Invalid threshold rule '{rule_text}'. "
-                "Expected forms like '<=0.1', '>0.5', '==0.2'."
-            )
-
-        def eval_rule(op, val, arr):
-            if op == "<=":
-                return arr <= val
-            if op == ">=":
-                return arr >= val
-            if op == "<":
-                return arr < val
-            if op == ">":
-                return arr > val
-            if op == "==":
-                return arr == val
-            raise ValueError(f"Unsupported operator: {op}")
-
-        if threshold_rules is None:
-            threshold = float(threshold)
-            threshold_str = f"{threshold:g}"
-            group_levels = [
-                f"P({disease_prs_name})<={threshold_str}",
-                f"P({disease_prs_name})>{threshold_str}",
-            ]
-            dat.data[group_col] = np.where(
-                probs > threshold,
-                group_levels[1],
-                group_levels[0],
-            )
-        else:
-            if isinstance(threshold_rules, str):
-                threshold_rules = [threshold_rules]
-            if len(threshold_rules) == 0:
-                raise ValueError("threshold_rules cannot be empty.")
-
-            parsed_rules = [parse_threshold_rule(r) for r in threshold_rules]
-            group_levels = [
-                f"P({disease_prs_name}){rule}" for _, _, rule in parsed_rules
-            ]
-
-            # Keep a deterministic single-group assignment for models that rely on
-            # one group label per sample.
-            assigned = np.zeros(dat.N, dtype=bool)
-            groups = np.full(dat.N, "", dtype=object)
-            for (op, val, _), group_label in zip(parsed_rules, group_levels):
-                msk = eval_rule(op, val, probs) & (~assigned)
-                groups[msk] = group_label
-                assigned |= msk
-
-            groups[~assigned] = f"P({disease_prs_name})_UNMATCHED"
-            dat.data[group_col] = groups
-
-            # Treat each rule independently (cumulative/overlapping semantics).
-            for (op, val, _), group_label in zip(parsed_rules, group_levels):
-                rule_masks[group_label] = eval_rule(op, val, probs)
-    elif partition_method in {"quartile", "quantile"}:
-        n_quantiles = int(n_quantiles)
-        if n_quantiles < 2:
-            raise ValueError(
-                "n_quantiles must be >= 2 when using quartile/quantile partitioning."
-            )
-        q_labels = [f"Q{i + 1}" for i in range(n_quantiles)]
-        group_col = f"P({disease_prs_name}) quantile"
-        dat.data[group_col] = pd.qcut(
-            dat.data["DiseasePRS_MixingProb"].rank(method="first"),
-            q=n_quantiles,
-            labels=q_labels,
-        ).astype(str)
-        group_levels = q_labels
-    else:
-        raise ValueError(
-            "partition_method must be one of {'threshold', 'quartile', 'quantile'}."
-        )
+    # For threshold_rules we evaluate each rule mask independently.
+    rule_masks = (
+        grouping["group_masks"]
+        if partition_method == "threshold" and threshold_rules is not None
+        else {}
+    )
 
     weighted_label = "Weighted PRS"
     weighted_excl_label = "Weighted PRS (exc. disease)"
@@ -322,7 +459,7 @@ def extract_disease_mixing_quartile_metrics(
     out_df["AnalysisID"] = analysis_id
     out_df["Test biobank"] = test_biobank
 
-    group_order = ["All"] + group_levels
+    group_order = grouping["group_order"]
     out_df["Mixing_Group"] = pd.Categorical(
         out_df["Mixing_Group"], categories=group_order, ordered=True
     )
@@ -659,6 +796,310 @@ def plot_binary_mixing_group_panels(
     plt.close()
 
 
+def plot_prevalence_subsampled_mixing_accuracy_panels(
+    moe_model_name,
+    analysis_id,
+    test_biobank="ukbb",
+    dataset="test_data",
+    disease_prs_name=None,
+    output_file=None,
+    partition_method="threshold",
+    threshold=0.5,
+    threshold_rules=None,
+    n_quantiles=4,
+    min_group_size=30,
+    random_state=42,
+):
+    """
+    Plot 2x3 accuracy panels across three prevalence settings for mixing-weight groups.
+
+    Columns:
+    1) Original group prevalence
+    2) Group prevalence matched to overall sample prevalence
+    3) Group prevalence matched to 1:1 case-control
+
+    Rows:
+    - Top: ROC AUC
+    - Bottom: Incremental R^2 (Liability R^2)
+    """
+
+    if output_file is None:
+        output_file = (
+            f"figures/section_4/mixing_group_prevalence_subsampled_accuracy_"
+            f"{analysis_id}_{test_biobank}.png"
+        )
+
+    dat = PRSDataset.from_pickle(
+        f"data/harmonized_data/{analysis_id}/{test_biobank}/{dataset}.pkl"
+    )
+    dat.filter_samples(dat.data["Ancestry"] == "EUR")
+    if dat.phenotype_likelihood != "binomial":
+        raise ValueError(
+            "plot_prevalence_subsampled_mixing_accuracy_panels requires a binomial phenotype."
+        )
+
+    ukb_moe = MoEPRS.from_saved_model(
+        f"data/trained_models/{analysis_id}/ukbb/train_data/{moe_model_name}.pkl"
+    )
+
+    grouping = _build_mixing_groups_from_moe(
+        dat,
+        ukb_moe,
+        analysis_id=analysis_id,
+        disease_prs_name=disease_prs_name,
+        partition_method=partition_method,
+        threshold=threshold,
+        threshold_rules=threshold_rules,
+        n_quantiles=n_quantiles,
+    )
+    disease_prs_name = grouping["disease_prs_name"]
+    disease_expert_idx = grouping["disease_expert_idx"]
+    group_assign_col = grouping["group_col"]
+    group_levels = grouping["group_levels"]
+    group_order = grouping["group_order"]
+    group_masks = grouping["group_masks"]
+    group_short_map = grouping["group_short_map"]
+    short_order = grouping["short_order"]
+
+    moe_label = f"{moe_model_name} (UKB)"
+    weighted_label = "Weighted PRS"
+    weighted_excl_label = "Weighted PRS (exc. disease)"
+    keep_models = [moe_label, disease_prs_name, weighted_label, weighted_excl_label]
+
+    trained_models = {
+        moe_label: ukb_moe,
+        weighted_label: GroupMeanWeightedPRS(ukb_moe, group_assign_col),
+        weighted_excl_label: GroupMeanWeightedPRS(
+            ukb_moe, group_assign_col, exclude_models=[disease_expert_idx]
+        ),
+    }
+    preds = generate_predictions(dat, trained_models)
+    metrics = ["ROC_AUC", "Liability_R2"]
+
+    phenotype_vals = np.asarray(dat.get_phenotype()).reshape(-1)
+    overall_prevalence = float(np.nanmean(phenotype_vals))
+
+    scenario_specs = [
+        ("Original prevalence", None),
+        ("Matched to overall prevalence", overall_prevalence),
+        ("Matched to 1:1 prevalence", 0.5),
+    ]
+
+    def evaluate_scenario(scenario_label, target_prevalence, scenario_idx):
+        eval_rows = []
+        eval_groups = [("All", np.ones(dat.N, dtype=bool))] + [
+            (g, np.asarray(group_masks[g], dtype=bool)) for g in group_levels
+        ]
+
+        for g_idx, (g_label, base_mask) in enumerate(eval_groups):
+            eval_mask = base_mask
+            if target_prevalence is not None:
+                seed = (
+                    None
+                    if random_state is None
+                    else int(random_state + 1000 * scenario_idx + g_idx)
+                )
+                try:
+                    eval_mask = subsample_to_prevalence(
+                        dat,
+                        target_prevalence,
+                        mask=eval_mask,
+                        random_state=seed,
+                    )
+                except ValueError:
+                    continue
+
+            if eval_mask.sum() < min_group_size:
+                continue
+
+            try:
+                gdf = evaluate_prs_models(
+                    dat,
+                    other_models=preds,
+                    mask=eval_mask,
+                    metrics=metrics,
+                    evaluate_base_models=True,
+                    min_group_size=min_group_size,
+                )
+            except Exception:
+                continue
+
+            if gdf is None or gdf.empty:
+                continue
+
+            gdf["EvalGroup"] = g_label
+            gdf["Scenario"] = scenario_label
+            gdf["N"] = int(eval_mask.sum())
+            eval_rows.append(gdf)
+
+        if len(eval_rows) == 0:
+            return pd.DataFrame()
+
+        sdf = pd.concat(eval_rows, ignore_index=True)
+        sdf["PGS"] = sdf["PGS"].map(lambda x: MODEL_NAME_MAP[analysis_id].get(x, x))
+        return sdf
+
+    scenario_results = []
+    for s_idx, (scenario_label, target_prev) in enumerate(scenario_specs):
+        sdf = evaluate_scenario(scenario_label, target_prev, s_idx)
+        if not sdf.empty:
+            scenario_results.append(sdf)
+
+    if len(scenario_results) == 0:
+        raise ValueError(
+            "No valid scenario/group evaluation results available to plot."
+        )
+
+    plot_df = pd.concat(scenario_results, ignore_index=True)
+    plot_df = plot_df.loc[
+        plot_df["PGS"].isin(keep_models) & plot_df["EvalGroup"].isin(group_order)
+    ].copy()
+    if plot_df.empty:
+        raise ValueError("No target model results available after filtering.")
+
+    plot_df["Model"] = plot_df["PGS"].replace({moe_label: "MoEPRS"})
+    plot_df["GroupShort"] = plot_df["EvalGroup"].map(group_short_map)
+
+    model_order = [
+        m
+        for m in ["MoEPRS", disease_prs_name, weighted_label, weighted_excl_label]
+        if m in set(plot_df["Model"])
+    ]
+    disease_color = assign_models_consistent_colors([disease_prs_name]).get(
+        disease_prs_name, "#4C78A8"
+    )
+    model_palette = {
+        "MoEPRS": "#375E97",
+        disease_prs_name: disease_color,
+        weighted_label: "#111111",
+        weighted_excl_label: "#6F6F6F",
+    }
+
+    fig, axes = plt.subplots(
+        2,
+        3,
+        figsize=(12.8, 6.8),
+        squeeze=False,
+        sharey=True,
+        constrained_layout=True,
+    )
+
+    def draw_accuracy_panel(
+        ax, metric_name, scenario_label, show_legend=False, show_y=True
+    ):
+        metric_err_col = f"{metric_name}_err"
+        cols = ["Scenario", "EvalGroup", "GroupShort", "Model", metric_name]
+        if metric_err_col in plot_df.columns:
+            cols.append(metric_err_col)
+
+        mdf = plot_df.loc[
+            (plot_df["Scenario"] == scenario_label)
+            & plot_df["Model"].isin(model_order)
+            & plot_df[metric_name].notna(),
+            cols,
+        ].drop_duplicates(subset=["Scenario", "EvalGroup", "Model"])
+
+        if mdf.empty:
+            ax.set_title(scenario_label)
+            ax.set_axis_off()
+            return
+
+        sns.barplot(
+            data=mdf,
+            y="GroupShort",
+            x=metric_name,
+            hue="Model",
+            order=short_order,
+            hue_order=model_order,
+            palette=model_palette,
+            errorbar=None,
+            ax=ax,
+        )
+
+        if metric_err_col in mdf.columns and mdf[metric_err_col].notna().any():
+            num_hues = len(model_order)
+            dodge_width = 0.8
+            bar_height = dodge_width / max(num_hues, 1)
+            dodge_offsets = np.linspace(
+                -dodge_width / 2 + bar_height / 2,
+                dodge_width / 2 - bar_height / 2,
+                max(num_hues, 1),
+            )
+            y_base = {g: i for i, g in enumerate(short_order)}
+
+            for i_h, hval in enumerate(model_order):
+                for gval in short_order:
+                    row = mdf.loc[(mdf["Model"] == hval) & (mdf["GroupShort"] == gval)]
+                    if row.empty:
+                        continue
+                    x_err = row[metric_err_col].iloc[0]
+                    if pd.isna(x_err):
+                        continue
+                    x_val = float(row[metric_name].iloc[0])
+                    y_pos = y_base[gval] + dodge_offsets[i_h]
+                    ax.errorbar(
+                        x_val,
+                        y_pos,
+                        xerr=float(x_err),
+                        fmt="none",
+                        ecolor="black",
+                        lw=1.0,
+                        capsize=0,
+                    )
+
+        ax.set_xlabel("")
+        ax.set_ylabel("")
+        ax.set_title(scenario_label)
+        ax.set_axisbelow(True)
+        ax.grid(True, axis="x", alpha=0.25)
+
+        if metric_name == "ROC_AUC":
+            ax.set_xlim(0.5, 1.0)
+
+        if show_legend:
+            ax.legend(loc="best", frameon=False, fontsize=7, title=None)
+        else:
+            if ax.get_legend() is not None:
+                ax.get_legend().remove()
+
+        if not show_y:
+            ax.set_yticklabels([])
+
+    scenario_order = [s[0] for s in scenario_specs]
+    for col_idx, scenario_label in enumerate(scenario_order):
+        draw_accuracy_panel(
+            axes[0, col_idx],
+            "ROC_AUC",
+            scenario_label,
+            show_legend=(col_idx == 0),
+            show_y=(col_idx == 0),
+        )
+        draw_accuracy_panel(
+            axes[1, col_idx],
+            "Liability_R2",
+            scenario_label,
+            show_legend=False,
+            show_y=(col_idx == 0),
+        )
+
+    for col_idx in range(3):
+        axes[0, col_idx].set_xlabel("ROC AUC")
+        axes[1, col_idx].set_xlabel("Incremental $R^2$")
+
+    bb_short = BIOBANK_NAME_MAP_SHORT.get(test_biobank.lower(), test_biobank.upper())
+    fig.suptitle(
+        f"{ANALYSIS_TO_PHENOTYPE_MAP.get(analysis_id, analysis_id)} ({bb_short})"
+    )
+    if partition_method in {"quartile", "quantile"}:
+        y_label = f"Quartiles of\nP({disease_prs_name}) mixing weight"
+    else:
+        y_label = f"Groups of\nP({disease_prs_name}) mixing weight"
+    fig.supylabel(y_label)
+
+    plt.savefig(output_file, dpi=300)
+    plt.close()
+
+
 def plot_disease_prs_age_sex_accuracy(
     analysis_id,
     test_biobank="ukbb",
@@ -670,6 +1111,7 @@ def plot_disease_prs_age_sex_accuracy(
     """
     Plot prediction accuracy of the disease-specific PRS across sex and 3 age groups.
     Style is aligned with the LDL stratified-accuracy subpanel in section 3.
+    The x-axis visually separates Sex vs Recruitment age strata.
     """
 
     if output_file is None:
@@ -688,7 +1130,7 @@ def plot_disease_prs_age_sex_accuracy(
         category=["SexG", "AgeGroup3"],
     )
 
-    disease_prs = ANALYSIS_TO_SHORT_PHENOTYPE_MAP[analysis_id]
+    disease_prs = _get_disease_prs_name(analysis_id)
     plot_df = eval_df.loc[eval_df["PGS"] == disease_prs].copy()
 
     if plot_df.empty:
@@ -699,6 +1141,13 @@ def plot_disease_prs_age_sex_accuracy(
         )
 
     ordered_groups = ["Female", "Male", "Age<50", "Age 50–60", "Age>60"]
+    display_label_map = {
+        "Female": "Female",
+        "Male": "Male",
+        "Age<50": "<50",
+        "Age 50–60": "50-60",
+        "Age>60": ">60",
+    }
     plot_df = plot_df.loc[plot_df["EvalGroup"].isin(ordered_groups)].copy()
     plot_df["EvalGroup"] = pd.Categorical(
         plot_df["EvalGroup"], categories=ordered_groups, ordered=True
@@ -735,11 +1184,33 @@ def plot_disease_prs_age_sex_accuracy(
         f"{ANALYSIS_TO_PHENOTYPE_MAP.get(analysis_id, analysis_id)} ({bb_short})"
     )
     ax.set_xlabel("")
+    ax.set_xticklabels([display_label_map[g] for g in ordered_groups])
+    # Separate Sex vs Recruitment-age groups.
+    ax.axvline(1.5, color="grey", lw=1.0, ls="--", alpha=0.8, zorder=0)
+    ax.text(
+        0.2,
+        -0.22,
+        "Sex",
+        transform=ax.transAxes,
+        ha="center",
+        va="top",
+        fontsize=9,
+    )
+    ax.text(
+        0.7,
+        -0.22,
+        "Recruitment age",
+        transform=ax.transAxes,
+        ha="center",
+        va="top",
+        fontsize=9,
+    )
     ax.set_ylabel(metric_label_map.get(metric, metric.replace("_", " ")))
     ax.set_axisbelow(True)
     ax.grid(True, axis="y")
     plt.xticks(rotation=20, ha="right")
     plt.tight_layout()
+    plt.subplots_adjust(bottom=0.22)
     plt.savefig(output_file, dpi=300)
     plt.close()
 
@@ -765,7 +1236,11 @@ def plot_minority_ancestry_accuracy_panels(
 
     if analysis_ids is None:
         analysis_ids = sorted(
-            [a for a in ANALYSIS_TO_PHENOTYPE_MAP.keys() if a.endswith("_MT")]
+            [
+                a
+                for a in ANALYSIS_TO_PHENOTYPE_MAP.keys()
+                if ANALYSIS_TO_TABLE_MAP.get(a) == "multitrait_prs_table"
+            ]
         )
 
     if dataset_by_biobank is None:
@@ -776,12 +1251,14 @@ def plot_minority_ancestry_accuracy_panels(
 
     hue_order = [
         "MoEPRS (UKB)",
+        "MultiPRS (UKB)",
         "Disease-specific PRS",
         "Weighted PRS",
         "Weighted PRS (exc. disease)",
     ]
     palette = {
         "MoEPRS (UKB)": "#375E97",
+        "MultiPRS (UKB)": "#FFBB00",
         "Disease-specific PRS": "#BC80BD",
         "Weighted PRS": "#111111",
         "Weighted PRS (exc. disease)": "#6F6F6F",
@@ -811,11 +1288,17 @@ def plot_minority_ancestry_accuracy_panels(
                 )
             except Exception:
                 continue
+            try:
+                ukb_multiprs = MultiPRS.from_saved_model(
+                    f"data/trained_models/{analysis_id}/ukbb/train_data/MultiPRS.pkl"
+                )
+            except Exception:
+                continue
 
             dat.data["MinorityGroup"] = "non-EUR"
 
             disease_prs_name = disease_prs_name_map.get(
-                analysis_id, ANALYSIS_TO_SHORT_PHENOTYPE_MAP[analysis_id]
+                analysis_id, _get_disease_prs_name(analysis_id)
             )
             mapped_expert_names = [
                 MODEL_NAME_MAP[analysis_id].get(prs_id, prs_id)
@@ -827,11 +1310,13 @@ def plot_minority_ancestry_accuracy_panels(
             disease_expert_idx = mapped_expert_names.index(disease_prs_name)
 
             moe_label = f"{moe_model_name} (UKB)"
+            multiprs_label = "MultiPRS (UKB)"
             weighted_label = "Weighted PRS"
             weighted_excl_label = "Weighted PRS (exc. disease)"
 
             trained_models = {
                 moe_label: ukb_moe,
+                multiprs_label: ukb_multiprs,
                 weighted_label: GroupMeanWeightedPRS(ukb_moe, "MinorityGroup"),
                 weighted_excl_label: GroupMeanWeightedPRS(
                     ukb_moe, "MinorityGroup", exclude_models=[disease_expert_idx]
@@ -862,6 +1347,7 @@ def plot_minority_ancestry_accuracy_panels(
 
             keep_models = [
                 moe_label,
+                multiprs_label,
                 disease_prs_name,
                 weighted_label,
                 weighted_excl_label,
@@ -873,6 +1359,7 @@ def plot_minority_ancestry_accuracy_panels(
             edf["Model Name"] = edf["PGS"].replace(
                 {
                     moe_label: "MoEPRS (UKB)",
+                    multiprs_label: "MultiPRS (UKB)",
                     disease_prs_name: "Disease-specific PRS",
                     weighted_label: "Weighted PRS",
                     weighted_excl_label: "Weighted PRS (exc. disease)",
@@ -956,7 +1443,7 @@ if __name__ == "__main__":
         metrics_df = extract_accuracy_data_all_phenotypes(
             args.moe_model,
             biobank,
-            analysis_category="MT",
+            analysis_table_id="multitrait_prs_table",
             dataset=["test_data", "full_data"][biobank == "cartagene"],
             exclude_all=False,
         )
@@ -992,7 +1479,8 @@ if __name__ == "__main__":
         analysis_ids=[
             a
             for a in ANALYSIS_TO_PHENOTYPE_MAP.keys()
-            if a.endswith("_MT") and ANALYSIS_TO_PHENOTYPE_MAP[a] in phenotype_order
+            if ANALYSIS_TO_TABLE_MAP.get(a) == "multitrait_prs_table"
+            and ANALYSIS_TO_PHENOTYPE_MAP.get(a, a) in phenotype_order
         ],
         biobanks=("ukbb", "cartagene"),
         dataset_by_biobank={"ukbb": "test_data", "cartagene": "full_data"},
@@ -1011,10 +1499,20 @@ if __name__ == "__main__":
             dataset="test_data",
             partition_method="quartile",
             n_quantiles=4,
-            output_file=f"figures/section_4/mixing_group_summary_{analysis_id}_ukbb.png",
+            output_file=f"figures/section_4/group_summary_{analysis_id}_ukbb.png",
         )
 
-    for analysis_id in ["HF_MT", "STR_MT"]:
+        plot_prevalence_subsampled_mixing_accuracy_panels(
+            moe_model_name=args.moe_model,
+            analysis_id=analysis_id,
+            test_biobank="ukbb",
+            dataset="test_data",
+            partition_method="quartile",
+            n_quantiles=4,
+            output_file=f"figures/section_4/group_accuracy_prevalence_{analysis_id}_ukbb.png",
+        )
+
+    for analysis_id in ["HF_MT"]:
         plot_binary_mixing_group_panels(
             moe_model_name=args.moe_model,
             analysis_id=analysis_id,
@@ -1022,10 +1520,24 @@ if __name__ == "__main__":
             dataset="test_data",
             partition_method="threshold",
             threshold_rules=["<=0.05", "<=0.1", "<=0.25", "<=0.5", ">0.5"],
-            output_file=f"figures/section_4/mixing_group_summary_{analysis_id}_threshold_ukbb.png",
+            output_file=f"figures/section_4/group_summary_{analysis_id}_threshold_ukbb.png",
         )
 
-    # Figure out what's going on with STR_433
+    # ---------------------------------------------------------------------------
+    # Figure out what's going on with ASTHMA
+    plot_binary_mixing_group_panels(
+        moe_model_name=args.moe_model,
+        analysis_id="ASTHMA_MT",
+        test_biobank="ukbb",
+        dataset="test_data",
+        disease_prs_name="ALLERGY",
+        partition_method="threshold",
+        threshold_rules=[">0.1", ">0.25", ">0.5"],
+        output_file="figures/section_4/group_summary_ASTHMA_ALLERGY_threshold_ukbb.png",
+    )
+
+    # ---------------------------------------------------------------------------
+    # Figure out what's going on with stroke:
     plot_binary_mixing_group_panels(
         moe_model_name=args.moe_model,
         analysis_id="STR_MT",
@@ -1033,27 +1545,41 @@ if __name__ == "__main__":
         dataset="test_data",
         disease_prs_name="STR_433",
         partition_method="threshold",
-        threshold_rules=["<=0.1", ">0.1"],
-        output_file=f"figures/section_4/mixing_group_summary_{analysis_id}_STR433_threshold_ukbb.png",
+        threshold_rules=["<=0.05", "<=0.1", "<=0.25", "<=0.5", ">0.5"],
+        output_file="figures/section_4/group_summary_STR433_threshold_ukbb.png",
     )
 
+    # Figure out what's going on with STR_433
+    plot_binary_mixing_group_panels(
+        moe_model_name=args.moe_model,
+        analysis_id="STR_MT",
+        test_biobank="ukbb",
+        dataset="test_data",
+        disease_prs_name="STR_433.1",
+        partition_method="threshold",
+        threshold_rules=["<=0.1", ">0.1"],
+        output_file="figures/section_4/group_summary_STR433_1_threshold_ukbb.png",
+    )
+
+    # ---------------------------------------------------------------------------
+
     for analysis_id in ["CAD_MT", "HTN_MT", "T2D_MT"]:
-        plot_disease_prs_age_sex_accuracy(
-            analysis_id=analysis_id,
-            test_biobank="ukbb",
-            dataset="test_data",
-            metric="Liability_R2",
-            keep_ancestry=("EUR",),
-            output_file=f"figures/section_4/disease_prs_age_sex_accuracy_{analysis_id}_ukbb.png",
-        )
+        for biobank in ("ukbb", "cartagene"):
+            plot_disease_prs_age_sex_accuracy(
+                analysis_id=analysis_id,
+                test_biobank=biobank,
+                dataset="test_data",
+                metric="Liability_R2",
+                keep_ancestry=("EUR",),
+                output_file=f"figures/section_4/disease_prs_age_sex_accuracy_{analysis_id}_{biobank}.png",
+            )
 
     # ---------------- Plot PRS Mixture graphs ----------------
 
-    """
     for analysis_id in ANALYSIS_TO_PHENOTYPE_MAP.keys():
         if (
-            ANALYSIS_TO_PHENOTYPE_MAP[analysis_id] not in phenotype_order
-            or "_MT" not in analysis_id
+            ANALYSIS_TO_PHENOTYPE_MAP.get(analysis_id, analysis_id) not in phenotype_order
+            or ANALYSIS_TO_TABLE_MAP.get(analysis_id) != "multitrait_prs_table"
         ):
             continue
 
@@ -1081,4 +1607,3 @@ if __name__ == "__main__":
                 agg_mechanism="sort",
                 figsize=(g.fig.get_size_inches()[0] // 3, 3.1),
             )
-    """

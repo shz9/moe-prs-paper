@@ -9,6 +9,7 @@ sys.path.append(parent_dir)
 sys.path.append(osp.join(parent_dir, "model/"))
 
 from model_utils import get_analysis_id_mapper, get_model_name_mapper
+from model_utils import get_analysis_to_table_mapper
 
 # --------------------------------------------------------
 
@@ -16,6 +17,7 @@ from model_utils import get_analysis_id_mapper, get_model_name_mapper
 MODEL_NAME_MAP = get_model_name_mapper()
 ANALYSIS_TO_PHENOTYPE_MAP = get_analysis_id_mapper(target_col="Phenotype")
 ANALYSIS_TO_SHORT_PHENOTYPE_MAP = get_analysis_id_mapper(target_col="Phenotype_short")
+ANALYSIS_TO_TABLE_MAP = get_analysis_to_table_mapper()
 
 GROUP_MAP = {"0": "Female", "1": "Male"}
 
@@ -50,8 +52,9 @@ PRS_NAME_COLOR_MAP = {
     "HF": "#FB8072",
     "AF": "#BC80BD",
     "HEIGHT": "#CCEBC5",
-    "STR": "#8DD3C7",
-    "STR_433": "#FFED6F",
+    "STR_433": "#8DD3C7",
+    "STR_433.1": "#FFED6F",
+    "HDL": "#B39DDB",
     "DEM": "#C6DBEF",
     "EDU": "#9ADBE8",
     "GOUT": "#E5C494",
@@ -208,7 +211,7 @@ def read_eval_metrics(file_path):
     analysis_id = file_path.split("/")[-3]
 
     eval_df["AnalysisID"] = analysis_id
-    eval_df["Phenotype"] = ANALYSIS_TO_PHENOTYPE_MAP[analysis_id]
+    eval_df["Phenotype"] = ANALYSIS_TO_PHENOTYPE_MAP.get(analysis_id, analysis_id)
     eval_df["Test biobank"] = file_path.split("/")[-2].upper()
 
     return eval_df
@@ -218,7 +221,7 @@ def transform_eval_metrics(eval_df):
     # ----------------------------------------------------------------------
     # Extract details about the training cohort / PGS:
     def process_pgs(x, analysis_id):
-        NEW_MAP = MODEL_NAME_MAP[analysis_id]
+        NEW_MAP = MODEL_NAME_MAP.get(analysis_id, {})
 
         result = {
             "Training biobank": None,
