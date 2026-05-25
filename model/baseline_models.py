@@ -3,6 +3,7 @@ import pickle
 
 import numpy as np
 import pandas as pd
+from model_utils import deserialize_standard_scaler, serialize_standard_scaler
 from scipy.special import expit, logit
 from sklearn.exceptions import NotFittedError
 from sklearn.linear_model import (
@@ -103,13 +104,24 @@ class MultiPRS(object):
         model = cls()
 
         with open(param_file, "rb") as pf:
+            saved = pickle.load(pf)
+
+        if isinstance(saved, dict):
+            model.reg_model = saved["reg_model"]
+            model.expert_cols = saved["expert_cols"]
+            model.covariates_cols = saved["covariates_cols"]
+            model.data_scaler = deserialize_standard_scaler(
+                saved.get("data_scaler_state")
+            )
+            model.family = saved["family"]
+        else:
             (
                 model.reg_model,
                 model.expert_cols,
                 model.covariates_cols,
                 model.data_scaler,
                 model.family,
-            ) = pickle.load(pf)
+            ) = saved
 
         return model
 
@@ -181,7 +193,7 @@ class MultiPRS(object):
     def predict_prs(self, prs_dataset=None, logit_scale=False):
         assert self.input_cols is not None
 
-        coefs = self.get_coefficients()
+        coefs = self.get_model_parameters()
 
         if prs_dataset is None:
             input_data = self.input_data[:, [0, self.C]["Covariates" in coefs] :]
@@ -200,7 +212,7 @@ class MultiPRS(object):
             else:
                 return expit(pred)
 
-    def get_coefficients(self):
+    def get_model_parameters(self):
         assert self.reg_model is not None
 
         coefs = {"Intercept": self.reg_model.intercept_}
@@ -258,13 +270,13 @@ class MultiPRS(object):
 
         with open(output_file, "wb") as outf:
             pickle.dump(
-                [
-                    self.reg_model,
-                    self.expert_cols,
-                    self.covariates_cols,
-                    self.data_scaler,
-                    self.family,
-                ],
+                {
+                    "reg_model": self.reg_model,
+                    "expert_cols": self.expert_cols,
+                    "covariates_cols": self.covariates_cols,
+                    "data_scaler_state": serialize_standard_scaler(self.data_scaler),
+                    "family": self.family,
+                },
                 outf,
             )
 
@@ -439,6 +451,21 @@ class AncestryWeightedPRS(object):
     def from_saved_model(cls, param_file):
         model = cls()
         with open(param_file, "rb") as pf:
+            saved = pickle.load(pf)
+
+        if isinstance(saved, dict):
+            model.reg_model = saved["reg_model"]
+            model.expert_cols = saved["expert_cols"]
+            model.expert_ancestry_map = saved["expert_ancestry_map"]
+            model.ancestry_weights_cols = saved["ancestry_weights_cols"]
+            model.covariates_cols = saved["covariates_cols"]
+            model.weighing_scheme = saved["weighing_scheme"]
+            model.data_scaler = deserialize_standard_scaler(
+                saved.get("data_scaler_state")
+            )
+            model.family = saved["family"]
+            model.min_rep_prop = saved["min_rep_prop"]
+        else:
             (
                 model.reg_model,
                 model.expert_cols,
@@ -449,7 +476,7 @@ class AncestryWeightedPRS(object):
                 model.data_scaler,
                 model.family,
                 model.min_rep_prop,
-            ) = pickle.load(pf)
+            ) = saved
         return model
 
     @property
@@ -637,7 +664,7 @@ class AncestryWeightedPRS(object):
 
         return pred.flatten()
 
-    def get_coefficients(self):
+    def get_model_parameters(self):
         """
         Return a dict of coefficients:
           - if weighing_scheme == "before": {"All": {"Intercept": ..., "Covariates": ..., "PRS": ...}}
@@ -706,17 +733,17 @@ class AncestryWeightedPRS(object):
 
         with open(output_file, "wb") as outf:
             pickle.dump(
-                [
-                    self.reg_model,
-                    self.expert_cols,
-                    self.expert_ancestry_map,
-                    self.ancestry_weights_cols,
-                    self.covariates_cols,
-                    self.weighing_scheme,
-                    self.data_scaler,
-                    self.family,
-                    self.min_rep_prop,
-                ],
+                {
+                    "reg_model": self.reg_model,
+                    "expert_cols": self.expert_cols,
+                    "expert_ancestry_map": self.expert_ancestry_map,
+                    "ancestry_weights_cols": self.ancestry_weights_cols,
+                    "covariates_cols": self.covariates_cols,
+                    "weighing_scheme": self.weighing_scheme,
+                    "data_scaler_state": serialize_standard_scaler(self.data_scaler),
+                    "family": self.family,
+                    "min_rep_prop": self.min_rep_prop,
+                },
                 outf,
             )
 
@@ -855,6 +882,20 @@ class AttributePartitionedPRS(object):
     def from_saved_model(cls, param_file):
         model = cls()
         with open(param_file, "rb") as pf:
+            saved = pickle.load(pf)
+
+        if isinstance(saved, dict):
+            model.reg_model = saved["reg_model"]
+            model.partition_attribute = saved["partition_attribute"]
+            model.attribute_to_score_map = saved["attribute_to_score_map"]
+            model.attribute_values = saved["attribute_values"]
+            model.score_cols = saved["score_cols"]
+            model.covariates_cols = saved["covariates_cols"]
+            model.data_scaler = deserialize_standard_scaler(
+                saved.get("data_scaler_state")
+            )
+            model.family = saved["family"]
+        else:
             (
                 model.reg_model,
                 model.partition_attribute,
@@ -864,7 +905,7 @@ class AttributePartitionedPRS(object):
                 model.covariates_cols,
                 model.data_scaler,
                 model.family,
-            ) = pickle.load(pf)
+            ) = saved
         return model
 
     @property
@@ -987,7 +1028,7 @@ class AttributePartitionedPRS(object):
         return pred
 
     # ---------------------------------------------------------------------
-    def get_coefficients(self):
+    def get_model_parameters(self):
         all_coefs = {}
         for k, v in self.reg_model.items():
             coefs = {"Intercept": v.intercept_}
@@ -1009,16 +1050,16 @@ class AttributePartitionedPRS(object):
 
         with open(output_file, "wb") as outf:
             pickle.dump(
-                [
-                    self.reg_model,
-                    self.partition_attribute,
-                    self.attribute_to_score_map,
-                    self.attribute_values,
-                    self.score_cols,
-                    self.covariates_cols,
-                    self.data_scaler,
-                    self.family,
-                ],
+                {
+                    "reg_model": self.reg_model,
+                    "partition_attribute": self.partition_attribute,
+                    "attribute_to_score_map": self.attribute_to_score_map,
+                    "attribute_values": self.attribute_values,
+                    "score_cols": self.score_cols,
+                    "covariates_cols": self.covariates_cols,
+                    "data_scaler_state": serialize_standard_scaler(self.data_scaler),
+                    "family": self.family,
+                },
                 outf,
             )
 
@@ -1118,6 +1159,19 @@ class AncestrySpecificMultiPRS(object):
     def from_saved_model(cls, param_file):
         model = cls()
         with open(param_file, "rb") as pf:
+            saved = pickle.load(pf)
+
+        if isinstance(saved, dict):
+            model.reg_model = saved["reg_model"]
+            model.expert_cols = saved["expert_cols"]
+            model.expert_ancestry_map = saved["expert_ancestry_map"]
+            model.ancestry_weights_cols = saved["ancestry_weights_cols"]
+            model.covariates_cols = saved["covariates_cols"]
+            model.data_scaler = deserialize_standard_scaler(
+                saved.get("data_scaler_state")
+            )
+            model.family = saved["family"]
+        else:
             (
                 model.reg_model,
                 model.expert_cols,
@@ -1126,7 +1180,7 @@ class AncestrySpecificMultiPRS(object):
                 model.covariates_cols,
                 model.data_scaler,
                 model.family,
-            ) = pickle.load(pf)
+            ) = saved
         return model
 
     @property
@@ -1249,7 +1303,7 @@ class AncestrySpecificMultiPRS(object):
             return expit(pred)
         return pred
 
-    def get_coefficients(self):
+    def get_model_parameters(self):
         assert self.reg_model is not None
         all_coefs = {}
         for anc, model in self.reg_model.items():
@@ -1298,14 +1352,14 @@ class AncestrySpecificMultiPRS(object):
 
         with open(output_file, "wb") as outf:
             pickle.dump(
-                [
-                    self.reg_model,
-                    self.expert_cols,
-                    self.expert_ancestry_map,
-                    self.ancestry_weights_cols,
-                    self.covariates_cols,
-                    self.data_scaler,
-                    self.family,
-                ],
+                {
+                    "reg_model": self.reg_model,
+                    "expert_cols": self.expert_cols,
+                    "expert_ancestry_map": self.expert_ancestry_map,
+                    "ancestry_weights_cols": self.ancestry_weights_cols,
+                    "covariates_cols": self.covariates_cols,
+                    "data_scaler_state": serialize_standard_scaler(self.data_scaler),
+                    "family": self.family,
+                },
                 outf,
             )

@@ -1,756 +1,183 @@
 import argparse
+import glob
 import os.path as osp
 import sys
-from itertools import product
+from itertools import combinations
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
 from magenpy.utils.system_utils import makedir
-from matplotlib.lines import Line2D
-from scipy.stats import pearsonr
-from viprs.eval.eval_utils import fit_linear_model
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+from scipy.spatial.distance import jensenshannon
 
 parent_dir = osp.dirname(osp.dirname(osp.abspath(__file__)))
 sys.path.append(parent_dir)
 sys.path.append(osp.join(parent_dir, "model/"))
 sys.path.append(osp.join(parent_dir, "evaluation/"))
 
-from baseline_models import MultiPRS
 from combined_accuracy_plots import plot_combined_accuracy_metrics
 from error_bars import add_error_bars
+from eval_utils import rowwise_cosine_similarity
+from model_utils import subset_standard_scaler
 from moe import MoEPRS
 from plot_pgs_admixture import plot_admixture_graphs
-from plot_predictive_performance import postprocess_metrics_df
 from plot_stratified_prediction_accuracy import extract_stratified_evaluation_metrics
 from plot_utils import (
+    ANALYSIS_TO_TABLE_MAP,
+    ANALYSIS_TO_PHENOTYPE_MAP,
     BIOBANK_NAME_MAP_SHORT,
-    GROUP_MAP,
     MODEL_NAME_MAP,
     assign_models_consistent_colors,
-    read_eval_metrics,
-    sort_groups,
-    transform_eval_metrics,
 )
 from PRSDataset import PRSDataset
+from section_2_figures import extract_accuracy_data_all_phenotypes
 
 
-def extract_complementarity_data(
-    pheno, biobank, residualize_prs=True, residualize_pheno=True
+def plot_age_and_sex_stratified_mixing_weights(
+    moe_model_name,
+    analysis_id,
+    biobank="ukbb",
+    stratified_model="EUR",
 ):
-    dat = PRSDataset.from_pickle(
-        f"data/harmonized_data/{pheno}/{biobank}/full_data.pkl"
+    dataset = PRSDataset.from_pickle(
+        f"data/harmonized_data/{analysis_id}/{biobank}/test_data.pkl"
     )
 
-    preds = dat.get_prs_predictions()
-    covars = pd.DataFrame(dat.get_covariates(), columns=dat.covariates_cols)
+    # Keep only European samples:
+    dataset.filter_samples(dataset.data["Ancestry"] == "EUR")
 
-    if residualize_pheno:
-        pheno = fit_linear_model(
-            dat.get_phenotype().flatten(), covars, add_intercept=True
-        ).resid
-    else:
-        pheno = dat.get_phenotype().flatten()
-
-    if residualize_prs:
-        for i in range(preds.shape[1]):
-            preds[:, i] = fit_linear_model(
-                preds[:, i], covars, add_intercept=True
-            ).resid
-
-    comp_df = pd.DataFrame(preds, columns=[MODEL_NAME_MAP[c] for c in dat.prs_cols])
-    comp_df["phenotype"] = pheno
-    comp_df[["Sex", "Age", "Ancestry"]] = dat.get_data_columns(
-        ["Sex", "Age", "Ancestry"]
-    )
-    comp_df["SexG"] = dat.data["Sex"].astype(int).astype(str).map(GROUP_MAP)
-    comp_df["AgeGroup2"] = np.array(["Age<=55", "Age>55"]).take(
-        dat.get_data_columns("Age").flatten() > 55
-    )
-    comp_df["Sex+Age"] = (
-        comp_df["SexG"].values + " (" + comp_df["AgeGroup2"].values + ")"
+    moe_model = MoEPRS.from_saved_model(
+        f"data/trained_models/{analysis_id}/{biobank}/train_data/{moe_model_name}.pkl"
     )
 
-    return comp_df
-
-
-def scatter_with_regression_and_corr(data, x, y, hue=None, palette=None):
-    if hue is not None:
-        if palette is None:
-            groups = data[hue].unique()
-            palette_dict = dict(zip(groups, sns.color_palette(n_colors=len(groups))))
-        else:
-            palette_dict = palette
-    else:
-        palette_dict = None
-
-    # Base scatterplot
-    ax = sns.scatterplot(data=data, x=x, y=y, hue=hue, palette=palette_dict, alpha=0.25)
-
-    # Add grey dashed lines at zero (make sure they are behind the points)
-    ax.axhline(0, color="grey", linestyle="--", linewidth=0.5, zorder=-1)
-    ax.axvline(0, color="grey", linestyle="--", linewidth=0.5, zorder=-1)
-
-    # Unique hue groups
-    if hue is None:
-        r, _ = pearsonr(data[x], data[y])
-        sns.regplot(data=data, x=x, y=y, label=f"(R = {r:.2f})")
-        ax.legend()
-    else:
-        # Store custom legend handles
-        custom_handles = []
-
-        for group, color in palette_dict.items():
-            subset = data[data[hue] == group]
-
-            # Plot regression line
-            sns.regplot(
-                data=subset, x=x, y=y, scatter=False, ax=ax, color=color, label=None
-            )
-
-            # Compute Pearson correlation
-            r, _ = pearsonr(subset[x], subset[y])
-            label = f"{group} (R = {r:.2f})"
-
-            # Add a custom handle for the legend
-            handle = Line2D([0], [0], color=color, lw=2)
-            custom_handles.append((handle, label))
-
-        # Build the legend
-        handles, labels = zip(*custom_handles)
-        ax.legend(handles=handles, labels=labels, title=hue)
-
-
-def generate_metrics_figures(biobank="ukbb"):
-    # -----------------------------------------------------------------
-    # Plot the accuracy metrics for LDL-C in EUR:
-    ldl_metrics_eur = extract_stratified_evaluation_metrics(
-        pheno="LDL",
-        biobank=biobank,
-        keep_ancestry=["EUR"],
-        category=["SexG", "AgeGroup3"],
-    )
-    ldl_metrics_eur = ldl_metrics_eur.loc[ldl_metrics_eur["PGS"] == "EUR"]
-    ldl_metrics_eur = ldl_metrics_eur.loc[ldl_metrics_eur["EvalGroup"] != "All"]
-    ldl_metrics_eur.rename(columns={"PGS": "Stratified PRS"}, inplace=True)
-    ldl_metrics_eur = ldl_metrics_eur.reset_index(drop=True)
-
-    plt.figure(figsize=(5, 5))
-    g = sns.barplot(
-        ldl_metrics_eur,
-        x="EvalGroup",
-        y="Incremental_R2",
-        hue="Stratified PRS",
-        palette=assign_models_consistent_colors(
-            ldl_metrics_eur["Stratified PRS"].unique()
-        ),
-        order=["Female", "Male", "Age<50", "Age 50–60", "Age>60"],
+    # Extract weight and sex data for the individuals:
+    weights_df = pd.DataFrame(
+        dataset.get_data_columns(["Age", "Sex"]),
+        columns=["Age", "Sex"],
     )
 
-    add_error_bars(
-        g, ldl_metrics_eur, x="EvalGroup", y="Incremental_R2", hue_order=["EUR"]
-    )
+    weights_df["Sex"] = np.array(["Female", "Male"])[
+        weights_df["Sex"].values.astype(int)
+    ]
 
-    plt.title(
-        f"Prediction accuracy on LDL Cholesterol\nin samples of European ancestry ({BIOBANK_NAME_MAP_SHORT[biobank]})"
-    )
-
-    plt.xlabel("Evaluation Group")
-    plt.ylabel("Incremental $R^2$")
-
-    plt.tight_layout()
-    plt.savefig(f"figures/section_3/{biobank}_ldl_stratified_accuracy.eps")
-    plt.close()
-
-    # -----------------------------------------------------------------
-    # Plot the accuracy metrics for LDL-C (Adj) in EUR:
-
-    if biobank == "ukbb":
-        ldl_metrics_eur = extract_stratified_evaluation_metrics(
-            pheno="LDL_adj",
-            biobank=biobank,
-            keep_ancestry=["EUR"],
-            category=["SexG", "AgeGroup3"],
-        )
-        ldl_metrics_eur = ldl_metrics_eur.loc[ldl_metrics_eur["PGS"] == "EUR"]
-        ldl_metrics_eur = ldl_metrics_eur.loc[ldl_metrics_eur["EvalGroup"] != "All"]
-        ldl_metrics_eur.rename(columns={"PGS": "Stratified PRS"}, inplace=True)
-        ldl_metrics_eur = ldl_metrics_eur.reset_index(drop=True)
-
-        plt.figure(figsize=(5, 5))
-        g = sns.barplot(
-            ldl_metrics_eur,
-            x="EvalGroup",
-            y="Incremental_R2",
-            hue="Stratified PRS",
-            palette=assign_models_consistent_colors(
-                ldl_metrics_eur["Stratified PRS"].unique()
-            ),
-            order=["Female", "Male", "Age<50", "Age 50–60", "Age>60"],
-        )
-
-        add_error_bars(
-            g, ldl_metrics_eur, x="EvalGroup", y="Incremental_R2", hue_order=["EUR"]
-        )
-
-        plt.title(
-            f"Prediction accuracy on LDL Cholesterol (Adj.)\nin samples of European ancestry ({BIOBANK_NAME_MAP_SHORT[biobank]})"
-        )
-
-        plt.xlabel("Evaluation Group")
-        plt.ylabel("Incremental $R^2$")
-
-        plt.tight_layout()
-        plt.savefig(f"figures/section_3/{biobank}_ldl_adj_stratified_accuracy.eps")
-        plt.close()
-
-    # -----------------------------------------------------------------
-    # Plot the accuracy metrics for HDL-C in EUR:
-
-    hdl_metrics_eur = extract_stratified_evaluation_metrics(
-        pheno="HDL", biobank=biobank, keep_ancestry=["EUR"], category=["SexG"]
-    )
-    hdl_metrics_eur.rename(columns={"PGS": "Stratified PRS"}, inplace=True)
-    hdl_metrics_eur = hdl_metrics_eur.reset_index(drop=True)
-
-    plt.figure(figsize=(5, 5))
-    g = sns.barplot(
-        hdl_metrics_eur,
-        x="EvalGroup",
-        y="Incremental_R2",
-        hue="Stratified PRS",
-        palette=assign_models_consistent_colors(
-            hdl_metrics_eur["Stratified PRS"].unique()
-        ),
-        order=["All", "Female", "Male"],
-    )
-
-    add_error_bars(
-        g, hdl_metrics_eur, x="EvalGroup", y="Incremental_R2", hue_order=["EUR"]
-    )
-
-    plt.title(
-        f"Prediction accuracy on HDL Cholesterol\nin samples of European ancestry ({BIOBANK_NAME_MAP_SHORT[biobank]})"
-    )
-
-    plt.xlabel("Evaluation Group")
-    plt.ylabel("Incremental $R^2$")
-
-    plt.tight_layout()
-    plt.savefig(f"figures/section_3/{biobank}_hdl_stratified_accuracy.eps")
-    plt.close()
-
-    # -----------------------------------------------------------------
-    # Plot the complementarity between EUR and CSA PGS for HDL-C in EUR samples:
-
-    """
-    hdl_comp_eur = extract_complementarity_data(pheno='HDL', biobank=biobank)
-    hdl_comp_eur.rename(columns={'Sex': 'SexG', 'SexG': 'Sex'}, inplace=True)
-
-    for x, y in [('EUR', 'CSA'), ('EUR', 'EAS'), ('EUR', 'AFR')]:
-
-        plt.figure(figsize=(5, 5))
-
-        x_label = f'EUR Residuals ($PGS_{{{x}}} - y$)'
-        y_label = f'Prediction difference\n($PGS_{{{y}}} - PGS_{{{x}}}$)'
-
-        hdl_comp_eur[x_label] = hdl_comp_eur[x].values - hdl_comp_eur['phenotype'].values
-        hdl_comp_eur[y_label] =  hdl_comp_eur[y].values - hdl_comp_eur[x].values
-
-        scatter_with_regression_and_corr(
-            data=hdl_comp_eur, x=x_label, y=y_label, hue='Sex',
-            palette={
-                'Male': '#A1BE95',
-                'Female': '#F98866'
-            }
-        )
-
-        plt.title(f"Complementarity of {x} and {y} PGS for\nHDL in samples of European ancestry ({BIOBANK_NAME_MAP_SHORT[biobank]})")
-        plt.tight_layout()
-        plt.savefig(f"figures/section_3/{biobank}_hdl_complementarity_{x}_{y}.png", dpi=300)
-        plt.close()
-
-    # -----------------------------------------------------------------
-    # Plot the complementarity between EUR and CSA PGS for LDL-C in EUR samples:
-
-    ldl_comp_eur = extract_complementarity_data(pheno='LDL', biobank=biobank)
-    ldl_comp_eur.rename(columns={'Sex': 'SexG', 'SexG': 'Sex'}, inplace=True)
-
-    for x, y in [('EUR', 'CSA'), ('EUR', 'EAS'), ('EUR', 'AFR')]:
-
-        plt.figure(figsize=(5, 5))
-
-        x_label = f'EUR Residuals ($PGS_{{{x}}} - y$)'
-        y_label = f'Prediction difference\n($PGS_{{{y}}} - PGS_{{{x}}}$)'
-
-        ldl_comp_eur[x_label] = ldl_comp_eur[x].values - ldl_comp_eur['phenotype'].values
-        ldl_comp_eur[y_label] =  ldl_comp_eur[y].values - ldl_comp_eur[x].values
-
-        scatter_with_regression_and_corr(
-            data=ldl_comp_eur, x=x_label, y=y_label, hue='Sex',
-            palette={
-                'Male': '#A1BE95',
-                'Female': '#F98866'
-            }
-        )
-
-        plt.title(f"Complementarity of {x} and {y} PGS for\nLDL in samples of European ancestry ({BIOBANK_NAME_MAP_SHORT[biobank]})")
-        plt.tight_layout()
-        plt.savefig(f"figures/section_3/{biobank}_ldl_complementarity_{x}_{y}.png", dpi=300)
-        plt.close()
-    """
-    # -----------------------------------------------------------------
-    # Plot stratified performance metrics for log(TG) in CSA and MID samples:
-
-    logtg_metrics = extract_stratified_evaluation_metrics(
-        pheno="LOG_TG",
-        biobank=biobank,
-        keep_ancestry=["CSA", "MID"],
-        category=["Genetic_Distance_Q"],
-    )
-    logtg_metrics = logtg_metrics.loc[logtg_metrics["EvalGroup"] != "All"]
-    logtg_metrics.rename(columns={"PGS": "Stratified PRS"}, inplace=True)
-    logtg_metrics = logtg_metrics.reset_index(drop=True)
-
-    plt.figure(figsize=(6, 5))
-    g = sns.barplot(
-        logtg_metrics,
-        x="EvalGroup",
-        y="Incremental_R2",
-        hue="Stratified PRS",
-        palette=assign_models_consistent_colors(
-            logtg_metrics["Stratified PRS"].unique()
-        ),
-    )
-
-    add_error_bars(g, logtg_metrics, x="EvalGroup", y="Incremental_R2")
-
-    plt.legend(loc="center left", bbox_to_anchor=(1, 0.5), title="Stratified PRS")
-    plt.title(
-        f"Prediction accuracy on log(Triglycerides) in samples\nof Middle Eastern and South Asian ancestry ({BIOBANK_NAME_MAP_SHORT[biobank]})"
-    )
-
-    plt.xlabel("Quartile of genetic distance from Europeans")
-    plt.ylabel("Incremental $R^2$")
-
-    plt.tight_layout()
-    plt.savefig(f"figures/section_3/{biobank}_logtg_stratified_accuracy.eps")
-    plt.close()
-
-
-def generate_weight_figures(weights_df, biobank="ukbb"):
-    # Plot data for HDL:
-    plt.figure(figsize=(5, 5))
-    hdl_weights_df = weights_df.loc[weights_df["Phenotype"] == "HDL"]
-
-    x_order = list(
-        product(
-            sort_groups(
-                hdl_weights_df["Ancestry"].unique(),
-            ),
-            ["Female", "Male"],
-        )
-    )
-
-    hdl_weights_df.groupby(["Ancestry", "Sex"])[
-        ["EUR", "AFR", "EAS", "CSA"]
-    ].mean().reindex(x_order).plot(
-        kind="bar",
-        stacked=True,
-        color=assign_models_consistent_colors(["EUR", "EAS", "CSA", "AFR"], "Set3"),
-    )
-
-    plt.ylabel("Mean mixing proportions")
-    plt.title(
-        f"Mean Mixing Weights for HDL Cholesterol ({BIOBANK_NAME_MAP_SHORT[biobank]})"
-    )
-    plt.ylim((0.0, 1.0))
-    plt.legend(loc="center left", bbox_to_anchor=(1, 0.5), title="Stratified PRS")
-    plt.tight_layout()
-    plt.savefig(f"figures/section_3/weights_HDL_{biobank}.png", dpi=300)
-    plt.close()
-
-    # =================================================================
-    # Plot data for LDL:
+    prs_col_names = [
+        MODEL_NAME_MAP[analysis_id][prs_col] for prs_col in dataset.prs_cols
+    ]
+    weights_df[prs_col_names] = moe_model.predict_proba(dataset)
 
     plt.figure(figsize=(5, 5))
     sns.scatterplot(
-        data=weights_df.loc[
-            (weights_df["Phenotype"] == "LDL") & (weights_df["Ancestry"] == "EUR")
-        ],
+        data=weights_df,
         x="Age",
-        y="EUR",
+        y=stratified_model,
         hue="Sex",
         palette={"Male": "#A1BE95", "Female": "#F98866"},
         alpha=0.7,
     )
     plt.xlabel("Age at recruitment")
-    plt.ylabel("Mixing weight for EUR PRS")
+    plt.ylabel(f"Mixing weight for {stratified_model} PRS")
     plt.title(
-        f"Mixing weights for EUR PRS for LDL Cholesterol\nin samples of "
+        f"Mixing weights for {stratified_model} PRS for {ANALYSIS_TO_PHENOTYPE_MAP[analysis_id]}\nin samples of "
         f"European ancestry ({BIOBANK_NAME_MAP_SHORT[biobank]})"
     )
     plt.tight_layout()
-    plt.savefig(f"figures/section_3/weights_LDL_{biobank}.png", dpi=300)
+    plt.savefig(f"figures/section_3_new/weights_{analysis_id}_{biobank}.png", dpi=300)
     plt.close()
 
-    # =================================================================
-    # Plot data for LDL adj:
 
-    if biobank == "ukbb":
-        plt.figure(figsize=(5, 5))
-        sns.scatterplot(
-            data=weights_df.loc[
-                (weights_df["Phenotype"] == "LDL_adj")
-                & (weights_df["Ancestry"] == "EUR")
-            ],
-            x="Age",
-            y="EUR",
-            hue="Sex",
-            palette={"Male": "#A1BE95", "Female": "#F98866"},
-            alpha=0.7,
-        )
-        plt.ylim([0.0, 1.0])
-        plt.xlabel("Age at recruitment")
-        plt.ylabel("Mixing weight for EUR PRS")
-        plt.title(
-            f"Mixing weights for EUR PRS for LDL Cholesterol (adj)\nin samples of "
-            f"European ancestry ({BIOBANK_NAME_MAP_SHORT[biobank]})"
-        )
-        plt.tight_layout()
-        plt.savefig(f"figures/section_3/weights_LDL_adj_{biobank}.png", dpi=300)
-        plt.close()
-
-    # =================================================================
-    # Plot data for log(TG):
+def generate_stratified_metrics_figures(
+    analysis_id,
+    biobank="ukbb",
+    keep_ancestry=("EUR",),
+    category=("SexG", "AgeGroup3"),
+):
+    # -----------------------------------------------------------------
+    metrics_df = extract_stratified_evaluation_metrics(
+        analysis_id,
+        biobank=biobank,
+        keep_ancestry=keep_ancestry,
+        category=category,
+    )
+    metrics_df = metrics_df.loc[metrics_df["PGS"].isin(keep_ancestry)]
+    metrics_df = metrics_df.loc[metrics_df["EvalGroup"] != "All"]
+    metrics_df.rename(columns={"PGS": "Stratified PRS"}, inplace=True)
+    metrics_df = metrics_df.reset_index(drop=True)
 
     plt.figure(figsize=(5, 5))
-    subdf = weights_df.loc[
-        (weights_df["Phenotype"] == "LOG_TG")
-        & (weights_df["Ancestry"].isin(["MID", "CSA"]))
-    ]
-
-    anc_symbols = {
-        "MID": "x",
-        "CSA": "o",
-    }
-
-    for anc, symbol in anc_symbols.items():
-        subsubdf = subdf.loc[subdf["Ancestry"] == anc]
-
-        plt.scatter(
-            subsubdf["PC1"].values,
-            subsubdf["PC2"].values,
-            c=subsubdf["EUR"],
-            marker=symbol,
-            alpha=0.8,
-            label=anc,
-        )
-
-    # Plot the medoid of European data:
-    eur_df = weights_df.loc[
-        (weights_df["Phenotype"] == "LOG_TG") & (weights_df["Ancestry"] == "EUR")
-    ]
-    eur_centroid = np.median(eur_df[[f"PC{i + 1}" for i in range(10)]].values, axis=0)
-    plt.scatter(
-        eur_centroid[0], eur_centroid[1], marker="*", color="red", label="EUR centroid"
-    )
-
-    plt.xlabel("PC 1")
-    plt.ylabel("PC 2")
-    plt.legend(title="Ancestry group")
-    cbar = plt.colorbar()
-    cbar.ax.set_ylabel("Mixing weight for EUR PRS", rotation=90)
-    plt.title(
-        f"Mixing weight for EUR PRS for log(Triglycerides)\nin minority "
-        f"ancestries in ({BIOBANK_NAME_MAP_SHORT[biobank]})"
-    )
-
-    plt.tight_layout()
-    plt.savefig(f"figures/section_3/weights_LOG_TG_{biobank}.png", dpi=300)
-    plt.close()
-
-
-def extract_weights_data(moe_model_name, biobank="ukbb"):
-    w_dfs = []
-
-    for pheno in phenotypes:
-        # Extract expert weights from model for same dataset:
-        try:
-            dataset = PRSDataset.from_pickle(
-                f"data/harmonized_data/{pheno}/{biobank}/test_data.pkl"
-            )
-            moe_model = MoEPRS.from_saved_model(
-                f"data/trained_models/{pheno}/{biobank}/train_data/{moe_model_name}.pkl"
-            )
-        except Exception as e:
-            print(e)
-            continue
-
-        w_df = pd.DataFrame(
-            np.array(["Female", "Male"])[dataset.get_data_columns("Sex").astype(int)],
-            columns=["Sex"],
-        )
-        extract_cols = ["Age", "Ancestry"] + ["PC" + str(i) for i in range(1, 11)]
-        w_df[extract_cols] = dataset.get_data_columns(extract_cols)
-
-        prs_col_names = [MODEL_NAME_MAP[prs_col] for prs_col in dataset.prs_cols]
-
-        w_df[prs_col_names] = moe_model.predict_proba(dataset)
-        w_df["Phenotype"] = pheno
-
-        w_dfs.append(w_df)
-
-    return pd.concat(w_dfs, axis=0).reset_index(drop=True)
-
-
-def extract_accuracy_data(
-    moe_model_name,
-    test_biobank="ukbb",
-    metric="Incremental_R2",
-    dataset="test_data",
-    evaluation_category="Ancestry",
-):
-    dfs = []
-
-    for pheno in phenotypes:
-        # Extract accuracy metrics:
-        f = f"data/evaluation/{pheno}/{test_biobank}/{dataset}.csv"
-
-        try:
-            df = transform_eval_metrics(read_eval_metrics(f))
-        except Exception as e:
-            print(e)
-            continue
-
-        df = df.loc[
-            (df["Model Category"] != "MoE")
-            | df["Model Name"].isin(
-                [
-                    f"{moe_model_name} (ukbb)",
-                    f"{moe_model_name} (cartagene)",
-                ]
-            )
-        ]
-
-        df = df.loc[
-            (df["Model Category"] == "MoE")
-            | (df["Model Category"] == "MultiPRS")
-            | (df["Training biobank"] == test_biobank.upper())
-        ]
-
-        # Rename the models for clarity:
-        df["Model Name"] = df["Model Name"].str.replace(
-            f"{moe_model_name} (ukbb)", "MoEPRS (UKB)", regex=False
-        )
-        df["Model Name"] = df["Model Name"].str.replace(
-            f"{moe_model_name} (cartagene)", "MoEPRS (CaG)", regex=False
-        )
-        df["Model Name"] = df["Model Name"].str.replace(
-            "MultiPRS (ukbb)", "MultiPRS (UKB)", regex=False
-        )
-        df["Model Name"] = df["Model Name"].str.replace(
-            "MultiPRS (cartagene)", "MultiPRS (CaG)", regex=False
-        )
-
-        df = postprocess_metrics_df(
-            df,
-            metric=metric,
-            category=evaluation_category,
-            min_sample_size=50,
-            aggregate_single_prs=True,
-            include_cohort_matched=True,
-        )
-
-        dfs.append(df)
-
-    dfs = pd.concat(dfs, axis=0).reset_index(drop=True)
-
-    dfs["Phenotype"] = dfs["Phenotype"].map(phenotypes)
-    dfs["Phenotype"] += {"ukbb": " (UKB)", "cartagene": " (CaG)"}[test_biobank]
-
-    return dfs
-
-
-def extract_moe_model_hdl_data(
-    moe_model_name,
-    biobank,
-    dataset="test_data",
-    keep_ancestry=None,
-    exclude_ancestry=None,
-):
-    if isinstance(keep_ancestry, str):
-        keep_ancestry = [keep_ancestry]
-
-    if isinstance(exclude_ancestry, str):
-        exclude_ancestry = [exclude_ancestry]
-
-    dat = PRSDataset.from_pickle(f"data/harmonized_data/HDL/{biobank}/{dataset}.pkl")
-    model = MoEPRS.from_saved_model(
-        f"data/trained_models/HDL/{biobank}/train_data/{moe_model_name}.pkl"
-    )
-
-    if keep_ancestry is not None:
-        dat.filter_samples(dat.data["Ancestry"].isin(keep_ancestry))
-    elif exclude_ancestry is not None:
-        dat.filter_samples(~dat.data["Ancestry"].isin(exclude_ancestry))
-
-    # Extract data:
-    preds = model.get_predictions(dat)
-    pheno = dat.get_phenotype(scaler=model.data_scaler).flatten()
-    sex = dat.get_data_columns(["Sex"]).flatten()
-
-    plot_data = []
-
-    for i, prs in enumerate(dat.prs_cols):
-        plot_data.append(
-            pd.DataFrame(
-                {
-                    "sq_error": (pheno - preds[:, i]) ** 2,
-                    "HDL": pheno,
-                    "Sex": sex,
-                    "Expert PGS": MODEL_NAME_MAP[prs],
-                }
-            )
-        )
-
-    plot_data = pd.concat(plot_data)
-    plot_data["Sex"] = plot_data["Sex"].astype(int).astype(str).map(GROUP_MAP)
-
-    plot_data_cp = plot_data.copy()
-    plot_data_cp["Sex"] = "All"
-
-    return pd.concat([plot_data, plot_data_cp])
-
-
-def plot_hdl_variance_and_performance_characteristics(biobank="ukbb"):
-    # Create figure and axes
-    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, sharex=True, figsize=(5, 5))
-
-    dataset = PRSDataset.from_pickle(
-        f"data/harmonized_data/HDL/{biobank}/train_data.pkl"
-    )
-    summary = dataset.data.groupby("Sex")["HDL"].var()
-    summary.index = summary.index.map({0: "Female", 1: "Male"})
-    summary = pd.concat(
-        [summary, pd.Series([np.var(dataset.data["HDL"])], index=["All"])]
-    )
-
-    sns.barplot(
-        summary,
-        order=["All", "Female", "Male"],
-        palette={"All": "#C0C0C0", "Female": "#F98866", "Male": "#A1BE95"},
-        width=0.5,
-        ax=ax1,
-    )
-    ax1.set_yticks(
-        np.round(np.linspace(0.0, np.ceil(summary.max() / 0.05) * 0.05, 3), 2)
-    )
-    ax1.set_axisbelow(True)
-    ax1.grid(True, axis="y")
-    ax1.set_ylabel("HDL Variance")
-
-    sq_error_plot_data = extract_moe_model_hdl_data(
-        args.moe_model, biobank, keep_ancestry=["EUR"]
-    )
-
-    sns.barplot(
-        data=sq_error_plot_data,
-        x="Sex",
-        y="sq_error",
-        hue="Expert PGS",
-        palette=assign_models_consistent_colors(
-            sq_error_plot_data["Expert PGS"].unique()
-        ),
-        order=["All", "Female", "Male"],
-        ax=ax2,
-        # showmeans=True,
-        # showfliers=False,
-        # meanprops={"markerfacecolor": "black",
-        #           "markeredgecolor": "black"}
-    )
-    ax2.set_ylabel("MSE")
-    ax2.set_yticks([0.0, 0.5, 1.0])
-    ax2.set_axisbelow(True)
-    ax2.grid(True, axis="y")
-
-    hdl_metrics_eur = extract_stratified_evaluation_metrics(
-        pheno="HDL", biobank=biobank, keep_ancestry=["EUR"], category=["SexG"]
-    )
-    hdl_metrics_eur.rename(columns={"PGS": "Stratified PRS"}, inplace=True)
-    hdl_metrics_eur = hdl_metrics_eur.reset_index(drop=True)
-
     g = sns.barplot(
-        hdl_metrics_eur,
+        metrics_df,
         x="EvalGroup",
         y="Incremental_R2",
         hue="Stratified PRS",
-        palette=assign_models_consistent_colors(
-            hdl_metrics_eur["Stratified PRS"].unique()
-        ),
-        ax=ax3,
-        order=["All", "Female", "Male"],
+        palette=assign_models_consistent_colors(metrics_df["Stratified PRS"].unique()),
+        order=["Female", "Male", "Age<50", "Age 50–60", "Age>60"],
     )
 
-    add_error_bars(
-        g, hdl_metrics_eur, x="EvalGroup", y="Incremental_R2", hue_order=["EUR"]
+    add_error_bars(g, metrics_df, x="EvalGroup", y="Incremental_R2", hue_order=["EUR"])
+
+    plt.title(
+        f"Prediction accuracy on {ANALYSIS_TO_PHENOTYPE_MAP[analysis_id]}\nin samples of European ancestry ({BIOBANK_NAME_MAP_SHORT[biobank]})"
     )
 
-    ax3.set_xlabel("Evaluation Group")
-    ax3.set_ylabel("Incremental $R^2$")
-    ax3.set_yticks([0.0, 0.05, 0.1, 0.15])
-    ax3.set_axisbelow(True)
-    ax3.grid(True, axis="y")
-
-    ax2.get_legend().remove()
-    ax3.get_legend().remove()
-
-    fig.suptitle(
-        "Sex-specific phenotypic variance and prediction accuracy\n"
-        "of ancestry-stratified PRS on HDL Cholesterol\n"
-        f"in samples of European ancestry ({BIOBANK_NAME_MAP_SHORT[biobank]})",
-        fontsize="medium",
-    )
+    plt.xlabel("Evaluation Group")
+    plt.ylabel("Incremental $R^2$")
 
     plt.tight_layout()
-    plt.savefig(f"figures/section_3/hdl_variance_performance_{biobank}.eps")
+    plt.savefig(
+        f"figures/section_3_new/stratified_accuracy_{analysis_id}_{biobank}.eps"
+    )
+    plt.close()
 
 
-def plot_ldl_medication_use_subpanel(biobank="ukbb"):
-    ldl_metrics_eur = extract_stratified_evaluation_metrics(
-        pheno="LDL",
+def plot_medication_use_figures(analysis_id, biobank="ukbb"):
+    metrics_df = extract_stratified_evaluation_metrics(
+        analysis_id,
         biobank=biobank,
         keep_ancestry=["EUR"],
         category=["SexG", "AgeGroup3"],
     )
-    ldl_metrics_eur = ldl_metrics_eur.loc[ldl_metrics_eur["PGS"] == "EUR"]
-    ldl_metrics_eur = ldl_metrics_eur.loc[ldl_metrics_eur["EvalGroup"] != "All"]
-    ldl_metrics_eur.rename(columns={"PGS": "Stratified PGS"}, inplace=True)
-    ldl_metrics_eur = ldl_metrics_eur.reset_index(drop=True)
+    metrics_df = metrics_df.loc[metrics_df["PGS"] == "EUR"]
+    metrics_df = metrics_df.loc[metrics_df["EvalGroup"] != "All"]
+    metrics_df.rename(columns={"PGS": "Stratified PGS"}, inplace=True)
+    metrics_df = metrics_df.reset_index(drop=True)
 
     # Convert column to ordered categorical
     ordered_cats = ["Female", "Male", "Age<50", "Age 50–60", "Age>60"]
-    ldl_metrics_eur["EvalGroup"] = pd.Categorical(
-        ldl_metrics_eur["EvalGroup"], categories=ordered_cats, ordered=True
+    metrics_df["EvalGroup"] = pd.Categorical(
+        metrics_df["EvalGroup"], categories=ordered_cats, ordered=True
     )
-    ldl_metrics_eur = ldl_metrics_eur.sort_values("EvalGroup")
+    metrics_df = metrics_df.sort_values("EvalGroup")
 
+    # -------------------------------------------
+    # Extract the medication-use prevalence data:
     med_prev = pd.read_csv(f"data/misc/medication_prevalence_{biobank}.csv")
-    chol_med_prev = med_prev.loc[
-        med_prev["Medication"] == "Cholesterol lowering medication"
-    ].copy()
-    chol_med_prev["Group"] = pd.Categorical(
-        chol_med_prev["Group"], categories=ordered_cats, ordered=True
+
+    if any([bp in analysis_id for bp in ("SBP", "DBP")]):
+        med_name = "Blood pressure medication"
+        med_prev = med_prev.loc[
+            med_prev["Medication"] == "Blood pressure medication"
+        ].copy()
+    else:
+        med_name = "Cholesterol medication"
+        med_prev = med_prev.loc[
+            med_prev["Medication"] == "Cholesterol lowering medication"
+        ].copy()
+
+    med_prev["Group"] = pd.Categorical(
+        med_prev["Group"], categories=ordered_cats, ordered=True
     )
-    chol_med_prev = chol_med_prev.sort_values("Group")
+    med_prev = med_prev.sort_values("Group")
+
+    # -------------------------------------------
 
     fig, ax1 = plt.subplots(figsize=(5, 5))
     width = 0.4
 
     x = np.arange(len(ordered_cats))
-    y1 = ldl_metrics_eur["Incremental_R2"].values
-    y2 = chol_med_prev["Proportion_Using_Medication"].values
+    y1 = metrics_df["Incremental_R2"].values
+    y2 = med_prev["Proportion_Using_Medication"].values
 
     eur_color = assign_models_consistent_colors(["EUR"])["EUR"]
     bars1 = ax1.bar(x - width / 2, y1, width=width, color=eur_color, label="Quantity 1")
@@ -761,7 +188,7 @@ def plot_ldl_medication_use_subpanel(biobank="ukbb"):
     ax1.set_xticks(x - width / 2)
     ax1.set_xticklabels(ordered_cats)
 
-    add_error_bars(ax1, ldl_metrics_eur, x="EvalGroup", y="Incremental_R2")
+    add_error_bars(ax1, metrics_df, x="EvalGroup", y="Incremental_R2")
 
     ax2 = ax1.twinx()
     bars2 = ax2.bar(
@@ -782,25 +209,246 @@ def plot_ldl_medication_use_subpanel(biobank="ukbb"):
 
     # Only include one bar per group in the legend
     custom_legend = [bars1[0], bars2[0]]
-    labels = ["Prediction accuracy (EUR)", "Cholesterol-lowering\nmedication use"]
+    labels = ["Prediction accuracy (EUR)", med_name + " use"]
     ax1.legend(custom_legend, labels, loc="upper left")
 
-    ax1.set_ylim([0.0, 0.22])
-    ax2.set_ylim([0.0, 0.32])
+    ax1.set_ylim([0.0, np.max(y1) * 1.3])
+    ax2.set_ylim([0.0, np.max(y2) * 1.3])
     plt.title(
-        "Prediction accuracy on LDL Cholesterol and\n"
-        "prevalence of cholesterol-lowering medication\n"
+        f"Prediction accuracy on {ANALYSIS_TO_PHENOTYPE_MAP[analysis_id]}\n"
+        f"and prevalence of {med_name}\n"
         f"in samples of European ancestry ({BIOBANK_NAME_MAP_SHORT[biobank]})"
     )
 
     plt.tight_layout()
 
-    plt.savefig(f"figures/section_3/ldl_accuracy_medication_use_{biobank}.eps")
+    plt.savefig(
+        f"figures/section_3_new/medication_use_accuracy_{analysis_id}_{biobank}.eps"
+    )
     plt.close()
 
 
+def extract_mixing_weight_similarity_across_analyses(
+    moe_model_name,
+    biobank,
+    ref_analysis="HEIGHT_MA",
+    metric="cosine",  # "cosine" or "jsd"
+):
+    unique_analysis = []
+    for analysis_id, table_id in ANALYSIS_TO_TABLE_MAP.items():
+        if table_id != "multi_ancestry_prs_table":
+            continue
+        model_f = (
+            f"data/trained_models/{analysis_id}/{biobank}/train_data/{moe_model_name}.pkl"
+        )
+        if osp.exists(model_f):
+            unique_analysis.append(model_f)
+
+    unique_analysis.append("Ancestry classifier")
+
+    ref_dataset = PRSDataset.from_pickle(
+        f"data/harmonized_data/{ref_analysis}/{biobank}/full_data.pkl"
+    )
+
+    sim_result = []
+
+    for models in combinations(unique_analysis, 2):
+        proba = []
+        phenotypes = []
+
+        # Load the probability predictions from the models:
+        for m in models:
+            if m == "Ancestry classifier":
+                proba.append(
+                    ref_dataset.data[["AFR", "AMR", "CSA", "EAS", "EUR", "MID"]].copy()
+                )
+
+                phenotypes.append("Ancestry classifier")
+
+            else:
+                moe_model = MoEPRS.from_saved_model(m)
+
+                # For compatability, update the scaler to only keep the gating model input features:
+                moe_model.data_scaler = subset_standard_scaler(
+                    moe_model.data_scaler,
+                    [c for c in moe_model.gate_input_cols if c != "Sex"],
+                )
+
+                analysis_id = m.split("/")[2]
+                phenotypes.append(ANALYSIS_TO_PHENOTYPE_MAP[analysis_id])
+
+                proba.append(
+                    pd.DataFrame(
+                        moe_model.predict_proba(ref_dataset),
+                        columns=[
+                            MODEL_NAME_MAP[analysis_id][c]
+                            for c in moe_model.expert_cols
+                        ],
+                    )
+                )
+
+        # Keep shared columns across the two models:
+        shared_cols = list(
+            set(list(proba[0].columns)).intersection(set(list(proba[1].columns)))
+        )
+
+        for i in range(len(proba)):
+            proba[i] = proba[i][shared_cols].values
+            proba[i] /= np.clip(proba[i].sum(axis=1).reshape(-1, 1), 1e-6, None)
+
+        masks = {
+            "All": np.arange(proba[0].shape[0]),
+            "Non-European ancestry": ref_dataset.data["Ancestry"].values != "EUR",
+            "Unassigned ancestry (OTH)": ref_dataset.data["Ancestry"].values == "OTH",
+        }
+
+        for msk, msk_val in masks.items():
+            # Compute similarity:
+            if metric == "cosine":
+                similarity = rowwise_cosine_similarity(
+                    proba[0][msk_val, :], proba[1][msk_val, :]
+                )
+            elif metric == "jsd":
+                # jensenshannon returns Jensen-Shannon distance, so convert to similarity
+                similarity = 1.0 - jensenshannon(
+                    proba[0][msk_val, :], proba[1][msk_val, :], axis=1, base=2
+                )
+            else:
+                raise ValueError("metric must be either 'cosine' or 'jsd'")
+
+            sim_result.append(
+                {
+                    "Similarity": np.mean(similarity),
+                    "Cohort": msk,
+                    "Phenotype 1": phenotypes[0],
+                    "Phenotype 2": phenotypes[1],
+                }
+            )
+
+    return pd.DataFrame(sim_result)
+
+
+def plot_triangular_similarity_matrix(
+    df,
+    output_path,
+    order,
+    phenotype1_col="Phenotype 1",
+    phenotype2_col="Phenotype 2",
+    similarity_col="Similarity",
+    title=None,
+    metric_name="Similarity",
+    cmap="viridis",
+    fill_value=np.nan,
+    figsize=(10, 8),
+    annot=False,
+    fmt=".2f",
+):
+    """
+    Plot a triangular similarity matrix from a long-form dataframe.
+
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        Must contain phenotype1_col, phenotype2_col, and similarity_col.
+    order : list
+        Desired phenotype order for both rows and columns.
+    phenotype1_col, phenotype2_col, similarity_col : str
+        Column names in df.
+    title : str or None
+        Plot title.
+    metric_name : str
+        Colorbar label.
+    cmap : str
+        Colormap.
+    fill_value : float
+        Value to fill missing cells with before plotting. Use np.nan to keep gaps.
+    figsize : tuple
+        Figure size.
+    annot : bool
+        Whether to annotate cells.
+    fmt : str
+        Annotation format.
+
+    Returns
+    -------
+    matrix : pandas.DataFrame
+        Symmetric similarity matrix ordered by `order`.
+    fig : matplotlib.figure.Figure
+        Figure object.
+    ax : matplotlib.axes.Axes
+        Heatmap axis.
+    """
+    # Build square matrix
+    matrix = df.pivot(
+        index=phenotype1_col, columns=phenotype2_col, values=similarity_col
+    )
+
+    # Reindex to requested order
+    matrix = matrix.reindex(index=order, columns=order)
+
+    # Mirror to make symmetric
+    matrix = matrix.combine_first(matrix.T)
+
+    # Reindex again in case combine_first changed ordering
+    matrix = matrix.reindex(index=order, columns=order)
+
+    # Fill missing values if requested
+    if not (isinstance(fill_value, float) and np.isnan(fill_value)):
+        matrix = matrix.fillna(fill_value)
+
+    # Create triangular mask
+    mask = np.triu(np.ones_like(matrix, dtype=bool))
+
+    # Create figure and axes
+    fig, ax = plt.subplots(figsize=figsize)
+
+    # Add a colorbar axis aligned to the heatmap axis
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="4%", pad=0.08)
+
+    # Plot
+    sns.heatmap(
+        matrix,
+        mask=mask,
+        cmap=cmap,
+        square=True,
+        annot=annot,
+        fmt=fmt,
+        vmin=0.0,
+        vmax=1.0,
+        ax=ax,
+        cbar=True,
+        cbar_ax=cax,
+        cbar_kws={"label": metric_name},
+    )
+
+    ax.set_ylabel("Mixing weight source")
+
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=90)
+    ax.set_yticklabels(ax.get_yticklabels(), rotation=0)
+
+    # Set the ancestry weights label to bold
+    if len(ax.get_xticklabels()) > 0:
+        ax.get_xticklabels()[-1].set_fontweight("bold")
+    if len(ax.get_yticklabels()) > 0:
+        ax.get_yticklabels()[-1].set_fontweight("bold")
+
+    if title is not None:
+        ax.set_title(title)
+
+    fig.tight_layout()
+    fig.savefig(output_path, bbox_inches="tight")
+    plt.close(fig)
+
+    return matrix, fig, ax
+
+
+# -----------------------------------------------------------------------------------------
+
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Plot Figure 3 of manuscript")
+    parser = argparse.ArgumentParser(
+        description="Plot figures of section 3 of manuscript"
+    )
 
     parser.add_argument(
         "--moe-model",
@@ -811,336 +459,219 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--fixed-rsid-moe-model",
-        dest="fr_moe_model",
+        "--similarity-metric",
+        dest="sim_metric",
         type=str,
-        default="MoE-fixed-resid",
-        help="The name of the MoE model to plot as reference.",
+        default="cosine",
+        choices={"cosine", "jsd"},
+        help="The similarity metric for the mixing weights.",
     )
 
     args = parser.parse_args()
 
-    sns.set_context("paper", font_scale=1.5)
-    makedir("figures/section_3/")
+    sns.set_context("paper", font_scale=1.25)
+    makedir("figures/section_3_new/")
 
-    phenotypes = {
-        "LDL": "LDL Cholesterol",
-        "LDL_adj": "LDL Cholesterol (adj.)",
-        "HDL": "HDL Cholesterol",
-        "LOG_TG": "log(Triglycerides)",
-        "TC": "Total Cholesterol",
-    }
+    # ----------------------------------------------------------
 
-    # ---------------- Plot accuracy subpanels ----------------
-    ukb_data = extract_accuracy_data(args.moe_model, "ukbb")
+    phenotype_order = [
+        "Standing Height",
+        "Log Body Mass Index",
+        "Diastolic blood pressure",
+        "Systolic blood pressure",
+        "Type 2 Diabetes",
+        "Asthma",
+        "Log triglycerides",
+        "Log HDL Cholesterol",
+        "LDL Cholesterol",
+        "Total Cholesterol",
+    ]
 
-    g = plot_combined_accuracy_metrics(
-        ukb_data,
-        output_f="figures/section_3/accuracy_subpanels_ukbb.eps",
-        col_order=[
-            "LDL Cholesterol (UKB)",
-            "HDL Cholesterol (UKB)",
-            "log(Triglycerides) (UKB)",
-            "Total Cholesterol (UKB)",
-        ],
-        hue_order=[
-            "MoEPRS (UKB)",
-            "MoEPRS (CaG)",
-            "MultiPRS (UKB)",
-            "MultiPRS (CaG)",
-            "Best Single Source PRS",
-            "Ancestry-matched PRS",
-        ],
-        col_wrap=4,
-        height=4,
-        aspect=1.15,
-        palette={
-            "MoEPRS (UKB)": "#375E97",
-            "MoEPRS (CaG)": "#8CA8D8",
-            "MultiPRS (UKB)": "#FFBB00",
-            "MultiPRS (CaG)": "#FFE066",
-            "Best Single Source PRS": "#BC80BD",
-            "Ancestry-matched PRS": "#66C2A5",
-        },
-        test_models=("MoEPRS (UKB)", "MultiPRS (UKB)"),
-    )
+    adj_pheno_analyses = ["LDL_ADJ_MA", "TC_ADJ_MA", "DBP_ADJ_MA", "SBP_ADJ_MA"]
 
-    # ----------------
-    # Plot performance for LDL/LDL_adj only:
-    plot_combined_accuracy_metrics(
-        ukb_data,
-        output_f="figures/section_3/accuracy_subpanels_ukbb_ldl_adj.eps",
-        col_order=["LDL Cholesterol (UKB)", "LDL Cholesterol (adj.) (UKB)"],
-        hue_order=[
-            "MoEPRS (UKB)",
-            "MultiPRS (UKB)",
-            "Best Single Source PRS",
-            "Ancestry-matched PRS",
-        ],
-        col_wrap=2,
-        height=4,
-        aspect=1.15,
-        palette={
-            "MoEPRS (UKB)": "#375E97",
-            "MoEPRS (CaG)": "#8CA8D8",
-            "MultiPRS (UKB)": "#FFBB00",
-            "MultiPRS (CaG)": "#FFE066",
-            "Best Single Source PRS": "#BC80BD",
-            "Ancestry-matched PRS": "#66C2A5",
-        },
-        test_models=("MoEPRS (UKB)", "MultiPRS (UKB)"),
-    )
+    metric_names = {"cosine": "Cosine similarity", "jsd": "Jensen-Shannon similarity"}
 
-    # ----------------
-    # Plot the same results, but using coarse ancestry labels:
-    ukb_data = extract_accuracy_data(
-        args.moe_model, "ukbb", evaluation_category="Coarse Ancestry"
-    )
+    figure_width = 15
 
-    g = plot_combined_accuracy_metrics(
-        ukb_data,
-        output_f="figures/section_3/accuracy_subpanels_ukbb_coarse_ancestry.eps",
-        col_order=[
-            "LDL Cholesterol (UKB)",
-            "HDL Cholesterol (UKB)",
-            "log(Triglycerides) (UKB)",
-            "Total Cholesterol (UKB)",
-        ],
-        hue_order=[
-            "MoEPRS (UKB)",
-            "MoEPRS (CaG)",
-            "MultiPRS (UKB)",
-            "MultiPRS (CaG)",
-            "Best Single Source PRS",
-            "Ancestry-matched PRS",
-        ],
-        col_wrap=4,
-        height=4,
-        aspect=1.15,
-        palette={
-            "MoEPRS (UKB)": "#375E97",
-            "MoEPRS (CaG)": "#8CA8D8",
-            "MultiPRS (UKB)": "#FFBB00",
-            "MultiPRS (CaG)": "#FFE066",
-            "Best Single Source PRS": "#BC80BD",
-            "Ancestry-matched PRS": "#66C2A5",
-        },
-        test_models=("MoEPRS (UKB)", "MultiPRS (UKB)"),
-    )
+    # ----------------------------------------------------------
 
-    # ----------------------------------------------------------------
-    # Plot cartagene data:
+    # Extract and plot the similarity matrix across phenotypes:
+    for biobank in ("ukbb", "cartagene"):
+        sim_data = extract_mixing_weight_similarity_across_analyses(
+            args.moe_model,
+            biobank,
+            ref_analysis="HEIGHT_MA",
+            metric=args.sim_metric,
+        )
 
-    cag_data = extract_accuracy_data(args.moe_model, "cartagene")
-
-    g = plot_combined_accuracy_metrics(
-        cag_data,
-        output_f="figures/section_3/accuracy_subpanels_cag.eps",
-        col_order=[
-            "LDL Cholesterol (CaG)",
-            "HDL Cholesterol (CaG)",
-            "log(Triglycerides) (CaG)",
-            "Total Cholesterol (CaG)",
-        ],
-        hue_order=[
-            "MoEPRS (UKB)",
-            "MoEPRS (CaG)",
-            "MultiPRS (UKB)",
-            "MultiPRS (CaG)",
-            "Best Single Source PRS",
-            "Ancestry-matched PRS",
-        ],
-        col_wrap=4,
-        height=4,
-        aspect=1.15,
-        palette={
-            "MoEPRS (UKB)": "#375E97",
-            "MoEPRS (CaG)": "#8CA8D8",
-            "MultiPRS (UKB)": "#FFBB00",
-            "MultiPRS (CaG)": "#FFE066",
-            "Best Single Source PRS": "#BC80BD",
-            "Ancestry-matched PRS": "#66C2A5",
-        },
-        test_models=("MoEPRS (UKB)", "MultiPRS (UKB)"),
-    )
-
-    # ----------------
-    # Plot the same data using coarse ancestry labels:
-    cag_data = extract_accuracy_data(
-        args.moe_model, "cartagene", evaluation_category="Coarse Ancestry"
-    )
-
-    g = plot_combined_accuracy_metrics(
-        cag_data,
-        output_f="figures/section_3/accuracy_subpanels_cag_coarse_ancestry.eps",
-        col_order=[
-            "LDL Cholesterol (CaG)",
-            "HDL Cholesterol (CaG)",
-            "log(Triglycerides) (CaG)",
-            "Total Cholesterol (CaG)",
-        ],
-        hue_order=[
-            "MoEPRS (UKB)",
-            "MoEPRS (CaG)",
-            "MultiPRS (UKB)",
-            "MultiPRS (CaG)",
-            "Best Single Source PRS",
-            "Ancestry-matched PRS",
-        ],
-        col_wrap=4,
-        height=4,
-        aspect=1.15,
-        palette={
-            "MoEPRS (UKB)": "#375E97",
-            "MoEPRS (CaG)": "#8CA8D8",
-            "MultiPRS (UKB)": "#FFBB00",
-            "MultiPRS (CaG)": "#FFE066",
-            "Best Single Source PRS": "#BC80BD",
-            "Ancestry-matched PRS": "#66C2A5",
-        },
-        test_models=("MoEPRS (UKB)", "MultiPRS (UKB)"),
-    )
-
-    # ---------------- Plot PRS Mixture graphs for the phenotypes ----------------
-
-    for pheno in phenotypes:
-        for biobank in ("ukbb", "cartagene"):
-            data_path = f"data/harmonized_data/{pheno}/{biobank}/test_data.pkl"
-            model_path = (
-                f"data/trained_models/{pheno}/{biobank}/train_data/{args.moe_model}.pkl"
+        for cohort in sim_data["Cohort"].unique():
+            plot_triangular_similarity_matrix(
+                sim_data.loc[sim_data["Cohort"] == cohort].copy(),
+                f"figures/section_3_new/similarity_matrix_{biobank}_{args.sim_metric}_{cohort}.eps",
+                phenotype_order + ["Ancestry classifier"],
+                title=f"Mixing weight similarity for ancestry-stratified PRS\nacrosss {len(phenotype_order)} phenotypes in {BIOBANK_NAME_MAP_SHORT[biobank]}\n{cohort} samples",
+                metric_name=f"Mean {metric_names[args.sim_metric]}",
+                figsize=(figure_width // 2, figure_width // 2),
             )
 
-            try:
-                p_dataset = PRSDataset.from_pickle(data_path)
-                moe_model = MoEPRS.from_saved_model(model_path)
-            except Exception as e:
-                print(e)
-                continue
+        # ------------------------------------------------------------------------------------
+        phenotype_order_adj = [ANALYSIS_TO_PHENOTYPE_MAP[p] for p in adj_pheno_analyses]
 
-            biobank_name = BIOBANK_NAME_MAP_SHORT[biobank]
+        sim_data_adj = sim_data.loc[
+            sim_data["Phenotype 1"].isin(phenotype_order_adj + ["Ancestry classifier"])
+            & sim_data["Phenotype 2"].isin(
+                phenotype_order_adj + ["Ancestry classifier"]
+            )
+        ].copy()
+
+        sim_data_adj["Phenotype 1"] = sim_data_adj["Phenotype 1"].str.replace(
+            " (Adj.)", ""
+        )
+        sim_data_adj["Phenotype 2"] = sim_data_adj["Phenotype 2"].str.replace(
+            " (Adj.)", ""
+        )
+
+        phenotype_order_adj_mod = [
+            p.replace(" (Adj.)", "") for p in phenotype_order_adj
+        ]
+
+        sns.set_context("paper", font_scale=1.0)
+
+        for cohort in sim_data["Cohort"].unique():
+            title = (
+                f"Mixing weight similarity for ancestry-stratified PRS\n"
+                f"across {len(phenotype_order_adj_mod)} "
+                f"$\\mathbf{{medication-adjusted}}$ phenotypes in "
+                f"{BIOBANK_NAME_MAP_SHORT[biobank]}\n"
+                f"{cohort} samples"
+            )
+            plot_triangular_similarity_matrix(
+                sim_data_adj.loc[sim_data_adj["Cohort"] == cohort].copy(),
+                f"figures/section_3_new/similarity_matrix_{biobank}_{args.sim_metric}_{cohort}_ADJ_phenotypes.eps",
+                phenotype_order_adj_mod + ["Ancestry classifier"],
+                title=title,
+                metric_name=f"Mean {metric_names[args.sim_metric]}",
+                figsize=(figure_width // 3, figure_width // 3),
+            )
+
+        sns.set_context("paper", font_scale=1.25)
+
+        # ------------------------------------------------------------------------------------
+
+        phenotype_order_all = phenotype_order + phenotype_order_adj
+
+        for cohort in sim_data["Cohort"].unique():
+            plot_triangular_similarity_matrix(
+                sim_data.loc[sim_data["Cohort"] == cohort].copy(),
+                f"figures/section_3_new/similarity_matrix_{biobank}_{args.sim_metric}_{cohort}_all_phenotypes.eps",
+                phenotype_order_all + ["Ancestry classifier"],
+                title=f"Mixing weight similarity for ancestry-stratified PRS\nacrosss {len(phenotype_order_all)} phenotypes in {BIOBANK_NAME_MAP_SHORT[biobank]}\n{cohort} samples",
+                metric_name=f"Mean {metric_names[args.sim_metric]}",
+                figsize=(figure_width // 2, figure_width // 2),
+            )
+
+    """
+    # ----------------------------------------------------------
+    # Plot mixture graphs for the medication-adjusted phenotypes:
+
+    sns.set_context("paper", font_scale=1.5)
+
+    for analysis_id in adj_pheno_analyses:
+        for biobank in ("ukbb", "cartagene"):
+            data_path = f"data/harmonized_data/{analysis_id}/{biobank}/test_data.pkl"
+            model_path = f"data/trained_models/{analysis_id}/{biobank}/train_data/{args.moe_model}.pkl"
+
+            p_dataset = PRSDataset.from_pickle(data_path)
+            moe_model = MoEPRS.from_saved_model(model_path)
 
             # Generate the admixture graphs:
             plot_admixture_graphs(
                 p_dataset,
                 moe_model,
                 group_col="Ancestry",
-                title=f"PRS Mixture Graph for {phenotypes[pheno]} ({biobank_name})",
-                output_file=f"figures/section_3/admixture_graphs_{pheno}_{biobank}.png",
+                title=f"PRS Mixture Graph for {ANALYSIS_TO_PHENOTYPE_MAP[analysis_id]} ({BIOBANK_NAME_MAP_SHORT[biobank]})",
+                output_file=f"figures/section_3_new/mixture_graphs_{analysis_id}_{biobank}.png",
                 subsample=True,
                 agg_mechanism="sort",
-                figsize=(g.fig.get_size_inches()[0], 3.1),
+                figsize=(figure_width, 3.1),
             )
 
-    # =================================================================
-    # Plot accuracy / admixture graph for HDL for the model with fixed variance:
+    # ----------------------------------------------------------
+    # Plot accuracy metrics for medication-adjusted phenotypes:
+    hue_order = [
+        "MoEPRS (UKB)",
+        "MoEPRS (CaG)",
+        "MultiPRS (UKB)",
+        "MultiPRS (CaG)",
+        "Best Single Source PRS",
+        "Ancestry-weighted PRS",
+    ]
 
-    ukb_data = extract_accuracy_data(args.fr_moe_model, "ukbb")
+    palette = {
+        "MoEPRS (UKB)": "#375E97",
+        "MoEPRS (CaG)": "#8CA8D8",
+        "MultiPRS (UKB)": "#FFBB00",
+        "MultiPRS (CaG)": "#FFE066",
+        "Best Single Source PRS": "#BC80BD",
+        "Ancestry-weighted PRS": "#66C2A5",
+    }
 
-    g = plot_combined_accuracy_metrics(
-        ukb_data,
-        output_f="figures/section_3/accuracy_subpanels_ukbb_fixed_var.eps",
-        col_order=[
-            "LDL Cholesterol (UKB)",
-            "HDL Cholesterol (UKB)",
-            "log(Triglycerides) (UKB)",
-            "Total Cholesterol (UKB)",
-        ],
-        hue_order=[
-            "MoEPRS (UKB)",
-            "MoEPRS (CaG)",
-            "MultiPRS (UKB)",
-            "MultiPRS (CaG)",
-            "Best Single Source PRS",
-            "Ancestry-matched PRS",
-        ],
-        col_wrap=4,
-        height=4,
-        aspect=1.15,
-        palette={
-            "MoEPRS (UKB)": "#375E97",
-            "MoEPRS (CaG)": "#8CA8D8",
-            "MultiPRS (UKB)": "#FFBB00",
-            "MultiPRS (CaG)": "#FFE066",
-            "Best Single Source PRS": "#BC80BD",
-            "Ancestry-matched PRS": "#66C2A5",
-        },
-        test_models=("MoEPRS (UKB)", "MultiPRS (UKB)"),
-    )
+    for biobank in ("ukbb", "cartagene"):
+        bb_short = BIOBANK_NAME_MAP_SHORT[biobank]
+        metrics_df = extract_accuracy_data_all_phenotypes(
+            args.moe_model,
+            biobank,
+            keep_analyses=["LDL_ADJ_MA", "TC_ADJ_MA", "DBP_ADJ_MA", "SBP_ADJ_MA"],
+        )
 
-    cag_data = extract_accuracy_data(args.fr_moe_model, "cartagene")
-
-    g = plot_combined_accuracy_metrics(
-        cag_data,
-        output_f="figures/section_3/accuracy_subpanels_cag_fixed_var.eps",
-        col_order=[
-            "LDL Cholesterol (CaG)",
-            "HDL Cholesterol (CaG)",
-            "log(Triglycerides) (CaG)",
-            "Total Cholesterol (CaG)",
-        ],
-        hue_order=[
-            "MoEPRS (UKB)",
-            "MoEPRS (CaG)",
-            "MultiPRS (UKB)",
-            "MultiPRS (CaG)",
-            "Best Single Source PRS",
-            "Ancestry-matched PRS",
-        ],
-        col_wrap=4,
-        height=4,
-        aspect=1.15,
-        palette={
-            "MoEPRS (UKB)": "#375E97",
-            "MoEPRS (CaG)": "#8CA8D8",
-            "MultiPRS (UKB)": "#FFBB00",
-            "MultiPRS (CaG)": "#FFE066",
-            "Best Single Source PRS": "#BC80BD",
-            "Ancestry-matched PRS": "#66C2A5",
-        },
-        test_models=("MoEPRS (UKB)", "MultiPRS (UKB)"),
-    )
-
-    for pheno in phenotypes:
-        # skip LDL_adj:
-        if pheno == "LDL_adj":
-            continue
-
-        for biobank in ("ukbb", "cartagene"):
-            p_dataset = PRSDataset.from_pickle(
-                f"data/harmonized_data/{pheno}/{biobank}/test_data.pkl"
+        metrics_df["Evaluation Group"] = (
+            "Samples of "
+            + metrics_df["Evaluation Group"].map(
+                {"EUR": "European", "non-EUR": "minority (non-EUR)"}
             )
-            moe_fixed_var = MoEPRS.from_saved_model(
-                f"data/trained_models/{pheno}/{biobank}/train_data/{args.fr_moe_model}.pkl"
-            )
+            + f" ancestry in {BIOBANK_NAME_MAP_SHORT[biobank]}"
+        )
 
-            biobank_name = BIOBANK_NAME_MAP_SHORT[biobank]
+        g = plot_combined_accuracy_metrics(
+            metrics_df,
+            output_f=f"figures/section_3_new/accuracy_metrics_med_adj_{biobank}.eps",
+            x="Phenotype",
+            palette=palette,
+            order=phenotype_order_adj,
+            hue_order=hue_order,
+            column=None,
+            row="Evaluation Group",
+            height=3,
+            aspect=4,
+            sharey=True,
+            test_models=[
+                (f"MoEPRS ({bb_short})", f"MultiPRS ({bb_short})"),
+                (f"MoEPRS ({bb_short})", "Best Single Source PRS"),
+            ],
+            significance_symbols=["*", "+"],
+            x_tick_rotation=90,
+        )
 
-            # Generate the admixture graphs:
-            plot_admixture_graphs(
-                p_dataset,
-                moe_fixed_var,
-                group_col="Ancestry",
-                title=f"PRS Mixture Graph for {phenotypes[pheno]} ({biobank_name})",
-                output_file=f"figures/section_3/admixture_graphs_{pheno}_{biobank}_fixed_var.png",
-                subsample=True,
-                agg_mechanism="sort",
-                figsize=(g.fig.get_size_inches()[0], 3.1),
-            )
-
-    # ---------------- Plot expert weights for the phenotypes ----------------
+    # ----------------------------------------------------------
+    #
     sns.set_context("paper", font_scale=1.25)
 
-    ukbb_weights = extract_weights_data(args.moe_model, biobank="ukbb")
-    generate_weight_figures(ukbb_weights, biobank="ukbb")
+    # Generate figures with stratified metrics:
+    for adj_pheno in adj_pheno_analyses:
+        for biobank in ("ukbb", "cartagene"):
+            # plots for unadjusted phenotypes:
+            generate_stratified_metrics_figures(
+                adj_pheno.replace("ADJ_", ""), biobank=biobank
+            )
+            plot_medication_use_figures(adj_pheno.replace("ADJ_", ""), biobank=biobank)
 
-    cag_weights = extract_weights_data(args.moe_model, biobank="cartagene")
-    generate_weight_figures(cag_weights, biobank="cartagene")
+            # plots for unadjusted phenotypes:
+            generate_stratified_metrics_figures(adj_pheno, biobank=biobank)
 
-    generate_metrics_figures(biobank="ukbb")
-    generate_metrics_figures(biobank="cartagene")
-
-    plot_ldl_medication_use_subpanel(biobank="ukbb")
-    plot_ldl_medication_use_subpanel(biobank="cartagene")
-
-    plot_hdl_variance_and_performance_characteristics(biobank="ukbb")
-    plot_hdl_variance_and_performance_characteristics(biobank="cartagene")
+            # Plot the gating model weights:
+            plot_age_and_sex_stratified_mixing_weights(
+                args.moe_model,
+                adj_pheno,
+                biobank=biobank,
+            )
+    """

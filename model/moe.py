@@ -3,6 +3,7 @@ import pickle
 
 import numpy as np
 import pandas as pd
+from model_utils import deserialize_standard_scaler, serialize_standard_scaler
 from scipy.linalg import lstsq
 from scipy.optimize import minimize
 from scipy.special import expit, huber, log_softmax, logsumexp, softmax
@@ -86,7 +87,7 @@ class MoEPRS(object):
         n_jobs=1,
     ):
         """
-        :param prs_dataset: An instance of `PRSDataset` with containing the data for training the model.
+        :param prs_dataset: An instance of `PRSDataset` containing the data for training the model.
         :param expert_cols: The names of the columns to be used as expert predictions.
         :param gate_input_cols: The names of the columns to be used as inputs for the gating model.
         :param expert_covariates_cols: The names of the columns to be used as covariates for the experts (optional).
@@ -248,6 +249,24 @@ class MoEPRS(object):
         model = cls()
 
         with open(param_file, "rb") as pf:
+            saved = pickle.load(pf)
+
+        if isinstance(saved, dict):
+            model.gate_params = saved["gate_params"]
+            model.expert_params = saved["expert_params"]
+            model.global_params = saved["global_params"]
+            model.log_resid = saved["log_resid"]
+            model.gate_add_intercept = saved["gate_add_intercept"]
+            model.expert_add_intercept = saved["expert_add_intercept"]
+            model.gate_input_cols = saved["gate_input_cols"]
+            model.expert_cols = saved["expert_cols"]
+            model.expert_covariates_cols = saved["expert_covariates_cols"]
+            model.global_covariates_cols = saved["global_covariates_cols"]
+            model.loss = saved["loss"]
+            model.data_scaler = deserialize_standard_scaler(
+                saved.get("data_scaler_state")
+            )
+        else:
             (
                 model.gate_params,
                 model.expert_params,
@@ -261,7 +280,7 @@ class MoEPRS(object):
                 model.global_covariates_cols,
                 model.loss,
                 model.data_scaler,
-            ) = pickle.load(pf)
+            ) = saved
 
         return model
 
@@ -277,7 +296,7 @@ class MoEPRS(object):
 
         if init_history:
             self.history = {
-                "expected_ncll": [],
+                "nll": [],
                 "nelbo": [],
                 "objective": [],
                 "ensemble_loss": [],
@@ -413,7 +432,7 @@ class MoEPRS(object):
             List of gradients, one per expert. Each has shape (J_k,)
         """
 
-        y_hat = self.get_predictions()  # shape (N, K)
+        y_hat = self._combined_linear_predictor()  # shape (N, K)
         y = self.phenotype  # shape (N, 1)
         W = self.expert_responsibility  # shape (N, K)
 
@@ -508,7 +527,7 @@ class MoEPRS(object):
         """
         The optimization objective
         """
-        return self.observed_ncll()
+        return self.observed_nll()
 
     def nelbo(self):
         """
@@ -536,9 +555,9 @@ class MoEPRS(object):
 
         return w_loss
 
-    def observed_ncll(self):
+    def observed_nll(self):
         """
-        The observed complete-data negative log-likelihood
+        The observed negative log-likelihood
         """
 
         nll = -(1.0 / self.N) * logsumexp(self.log_w + self.ll(), axis=1).sum()
@@ -600,7 +619,7 @@ class MoEPRS(object):
         Update the losses for each expert
         """
 
-        preds = self.get_predictions()
+        preds = self._combined_linear_predictor()
 
         if self.loss == "mse":
             self._expert_loss = (self.phenotype - preds) ** 2
@@ -613,7 +632,7 @@ class MoEPRS(object):
                 + self.class_weights[0] * (1.0 - self.phenotype) * np.log(1.0 - preds)
             )
 
-    def get_scaled_predictions(self, prs_dataset=None):
+    def _expert_linear_predictor(self, prs_dataset=None):
         """
         Get the scaled predictions for each expert. Specifically, we scale the prediction of
         each expert by the parameters of the linear model present in `expert_params`. If we define
@@ -675,25 +694,29 @@ class MoEPRS(object):
 
         return expert_predictions
 
-    def get_predictions(self, prs_dataset=None):
+    def _global_linear_predictor(self, prs_dataset=None):
+        if self.global_params is None:
+            return None
+
+        if prs_dataset is None:
+            global_covariates = self.global_covariates
+        else:
+            global_covariates = prs_dataset.get_data_columns(
+                self.global_covariates_cols,
+                add_intercept=not self.expert_add_intercept,
+                scaler=self.data_scaler,
+            )
+
+        return global_covariates.dot(self.global_params.T).reshape(-1, 1)
+
+    def _combined_linear_predictor(self, prs_dataset=None):
         """
         Get the predictions of each expert
         """
-        expert_predictions = self.get_scaled_predictions(prs_dataset)
-
-        if self.global_params is not None:
-            if prs_dataset is None:
-                global_covariates = self.global_covariates
-            else:
-                global_covariates = prs_dataset.get_data_columns(
-                    self.global_covariates_cols,
-                    add_intercept=not self.expert_add_intercept,
-                    scaler=self.data_scaler,
-                )
-
-            expert_predictions += global_covariates.dot(self.global_params.T).reshape(
-                -1, 1
-            )
+        expert_predictions = self._expert_linear_predictor(prs_dataset)
+        global_prediction = self._global_linear_predictor(prs_dataset)
+        if global_prediction is not None:
+            expert_predictions += global_prediction
 
         if self.loss == "bce":
             return expit(expert_predictions)
@@ -898,7 +921,7 @@ class MoEPRS(object):
         Predict for new samples
         """
 
-        scaled_pred = self.get_predictions(prs_dataset)
+        scaled_pred = self._combined_linear_predictor(prs_dataset)
 
         return (self.predict_proba(prs_dataset) * scaled_pred).sum(axis=1)
 
@@ -909,7 +932,7 @@ class MoEPRS(object):
         for the gating model.
         """
 
-        scaled_preds = self.get_scaled_predictions(prs_dataset)
+        scaled_preds = self._expert_linear_predictor(prs_dataset)
 
         if self.loss == "bce":
             scaled_preds = expit(scaled_preds)
@@ -1025,7 +1048,7 @@ class MoEPRS(object):
                 self.e_step()
                 self.m_step()
 
-            self.history["expected_ncll"].append(self.expected_ncll())
+            self.history["nll"].append(self.expected_ncll())
             self.history["nelbo"].append(self.nelbo())
             self.history["objective"].append(self.objective())
             self.history["ensemble_loss"].append(self.ensemble_loss())
@@ -1149,20 +1172,20 @@ class MoEPRS(object):
 
         with open(output_file, "wb") as outf:
             pickle.dump(
-                [
-                    self.gate_params,
-                    self.expert_params,
-                    self.global_params,
-                    self.log_resid,
-                    self.gate_add_intercept,
-                    self.expert_add_intercept,
-                    self.gate_input_cols,
-                    self.expert_cols,
-                    self.expert_covariates_cols,
-                    self.global_covariates_cols,
-                    self.loss,
-                    self.data_scaler,
-                ],
+                {
+                    "gate_params": self.gate_params,
+                    "expert_params": self.expert_params,
+                    "global_params": self.global_params,
+                    "log_resid": self.log_resid,
+                    "gate_add_intercept": self.gate_add_intercept,
+                    "expert_add_intercept": self.expert_add_intercept,
+                    "gate_input_cols": self.gate_input_cols,
+                    "expert_cols": self.expert_cols,
+                    "expert_covariates_cols": self.expert_covariates_cols,
+                    "global_covariates_cols": self.global_covariates_cols,
+                    "loss": self.loss,
+                    "data_scaler_state": serialize_standard_scaler(self.data_scaler),
+                },
                 outf,
             )
 
@@ -1244,14 +1267,14 @@ class GroupMeanWeightedPRS:
 
     def predict(self, prs_dataset):
         expert_preds = np.asarray(
-            self.moe_model.get_predictions(prs_dataset), dtype=float
+            self.moe_model._combined_linear_predictor(prs_dataset), dtype=float
         )
 
         return self._predict_weighted(prs_dataset, expert_preds)
 
     def predict_prs(self, prs_dataset):
         expert_preds = np.asarray(
-            self.moe_model.get_scaled_predictions(prs_dataset), dtype=float
+            self.moe_model._expert_linear_predictor(prs_dataset), dtype=float
         )
 
         if self.moe_model.loss == "bce":

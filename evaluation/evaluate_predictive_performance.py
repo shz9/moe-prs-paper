@@ -7,38 +7,109 @@ import sys
 import numpy as np
 import pandas as pd
 from magenpy.utils.system_utils import makedir
-from viprs.eval.binary_metrics import liability_r2, nagelkerke_r2, pr_auc, roc_auc
-from viprs.eval.continuous_metrics import (
-    incremental_r2,
-    mse,
-    partial_correlation,
-    pearson_r,
-)
 from viprs.eval.eval_utils import r2_stats
 
 parent_dir = osp.dirname(osp.dirname(osp.abspath(__file__)))
 sys.path.append(parent_dir)
 sys.path.append(osp.join(parent_dir, "model/"))
-sys.path.append(osp.join(parent_dir, "score/"))
 
 from baseline_models import AncestryWeightedPRS, AttributePartitionedPRS, MultiPRS
 from eval_utils import (
-    average_precision_at_top_percentile,
+    BINARY_EVAL_METRICS,
+    CONT_EVAL_METRICS,
+    EVAL_METRICS,
+    INCREMENTAL_METRICS,
     generate_categorical_masks,
     generate_coarse_ancestry_masks,
     generate_continuous_masks,
     generate_pc_cluster_masks,
     generate_predictions,
-    incremental_r2_matched_null,
+    incremental_r2_from_predictions,
 )
 from moe import MoEPRS
-from moe_pytorch_inference import load_model_any
+from moe_pytorch import TorchMoEPRS
 from PRSDataset import PRSDataset
+
+
+def _resolve_metric_names(prs_dataset, metrics=None):
+    if metrics is None:
+        if prs_dataset.phenotype_likelihood == "gaussian":
+            metrics = CONT_EVAL_METRICS
+        else:
+            metrics = BINARY_EVAL_METRICS
+
+    if isinstance(metrics, str):
+        metric_names = [metrics]
+    elif isinstance(metrics, dict):
+        metric_names = list(metrics.keys())
+    else:
+        metric_names = list(metrics)
+
+    for m in metric_names:
+        assert m in EVAL_METRICS, f"Metric {m} is not recognized."
+
+    return metric_names
+
+
+def _parse_model_id(model_id):
+    left, sep, right = model_id.partition(":")
+    if sep == "":
+        train_biobank = None
+        train_source = None
+        model_name = model_id
+    else:
+        parts = left.split("/")
+        train_biobank = parts[0] if len(parts) > 0 else None
+        train_source = "/".join(parts[1:]) if len(parts) > 1 else None
+        model_name = right
+
+    prediction_type = "prs_only" if model_name.endswith("-PRS-only") else "full"
+    base_name = model_name.replace("-PRS-only", "")
+
+    if "moe" in base_name.lower():
+        model_category = "MoE"
+    elif base_name == "MultiPRS":
+        model_category = "MultiPRS"
+    elif base_name == "AncestryWeightedPRS":
+        model_category = "AncestryWeightedPRS"
+    elif base_name == "SexMatchedPRS":
+        model_category = "AttributePartitionedPRS"
+    elif base_name == "Covariates":
+        model_category = "Covariates"
+    elif base_name.endswith("-covariates"):
+        model_category = "SinglePRS+Covariates"
+    else:
+        model_category = "SinglePRS"
+
+    return {
+        "model_id": model_id,
+        "model_name": base_name,
+        "prediction_type": prediction_type,
+        "model_category": model_category,
+        "train_biobank": train_biobank,
+        "train_source": train_source,
+    }
+
+
+def _resolve_reference_model_id(
+    model_catalog, test_biobank, ref_model_name="Covariates"
+):
+    mdf = model_catalog
+    mdf = mdf[
+        (mdf["model_name"] == ref_model_name)
+        & (mdf["prediction_type"] == "full")
+        & (mdf["train_biobank"] == test_biobank)
+    ]
+    if len(mdf) == 0:
+        return None
+    return mdf.iloc[0]["model_id"]
 
 
 def stratified_evaluation(
     prs_dataset,
     trained_models=None,
+    model_catalog=None,
+    ref_model_id=None,
     cat_group_cols=None,
     cont_group_cols=None,
     cont_group_bins=None,
@@ -81,13 +152,14 @@ def stratified_evaluation(
 
     edf = evaluate_prs_models(
         prs_dataset,
-        other_models=preds,
+        fitted_models=preds,
+        model_catalog=model_catalog,
+        ref_model_id=ref_model_id,
         metrics=metrics,
         evaluate_base_models=evaluate_base_models,
+        eval_category="All",
+        eval_group="All",
     )
-    edf["EvalCategory"] = "All"
-    edf["EvalGroup"] = "All"
-    edf["N"] = prs_dataset.N
 
     dfs.append(edf)
 
@@ -99,11 +171,15 @@ def stratified_evaluation(
             try:
                 edf = evaluate_prs_models(
                     prs_dataset,
-                    other_models=preds,
+                    fitted_models=preds,
+                    model_catalog=model_catalog,
+                    ref_model_id=ref_model_id,
                     mask=msk,
                     min_group_size=min_group_size,
                     metrics=metrics,
                     evaluate_base_models=evaluate_base_models,
+                    eval_category=mg,
+                    eval_group=m,
                 )
             except Exception as e:
                 continue
@@ -111,26 +187,22 @@ def stratified_evaluation(
             if edf is None:
                 continue
 
-            edf["EvalCategory"] = mg
-            edf["EvalGroup"] = m
-
-            if msk is None:
-                edf["N"] = prs_dataset.N
-            else:
-                edf["N"] = np.sum(msk)
-
             dfs.append(edf)
 
-    return pd.concat(dfs)
+    return pd.concat(dfs, ignore_index=True)
 
 
 def evaluate_prs_models(
     prs_dataset,
-    other_models=None,
+    fitted_models=None,
+    model_catalog=None,
+    ref_model_id=None,
     mask=None,
     metrics=None,
     evaluate_base_models=True,
     min_group_size=30,
+    eval_category="All",
+    eval_group="All",
 ):
     prs_dataset.set_backend("numpy")
 
@@ -142,30 +214,7 @@ def evaluate_prs_models(
             f"Skipping evaluation due to insufficient sample size ({mask.sum()} < {min_group_size})"
         )
 
-    # --------------------------------------------------------------------------
-    # Extract and preprocess which metrics to compute:
-    if metrics is None:
-        if prs_dataset.phenotype_likelihood == "gaussian":
-            metrics = ("CORR", "MSE", "Incremental_R2", "Partial_CORR", "AVG_PREC_TOP5")
-        else:
-            metrics = ("ROC_AUC", "PR_AUC", "Liability_R2", "Nagelkerke_R2")
-    else:
-        if isinstance(metrics, str):
-            metrics = [metrics]
-
-        # Check that the requested metric is valid:
-        for m in metrics:
-            assert m in (
-                "CORR",
-                "MSE",
-                "Incremental_R2",
-                "Partial_CORR",
-                "AVG_PREC_TOP5",
-                "ROC_AUC",
-                "PR_AUC",
-                "Liability_R2",
-                "Nagelkerke_R2",
-            )
+    metric_names = _resolve_metric_names(prs_dataset, metrics=metrics)
 
     # --------------------------------------------------------------------------
     # Extract the phenotype:
@@ -177,8 +226,11 @@ def evaluate_prs_models(
         raise ValueError("No phenotypic variance in this group of individuals!")
 
     if prs_dataset.phenotype_likelihood == "binomial":
-        if phenotype.sum() < 10:
-            raise ValueError("Too few cases to compute metrics reliably.")
+        num_cases = phenotype.sum()
+        if num_cases < 10 or num_cases > phenotype.shape[0] - 10:
+            raise ValueError(
+                "Highly unbalanced case/control numbers; Cannot compute metrics reliably."
+            )
 
     # --------------------------------------------------------------------------
     # Extract the polygenic scores to evaluate:
@@ -186,13 +238,38 @@ def evaluate_prs_models(
         prs_df = pd.DataFrame(
             prs_dataset.get_prs_predictions()[mask, :], columns=prs_dataset.prs_ids
         )
+        base_meta = pd.DataFrame(
+            [
+                {
+                    "model_id": m,
+                    "model_name": m,
+                    "prediction_type": "full",
+                    "model_category": "SinglePRS",
+                    "train_biobank": None,
+                    "train_source": None,
+                }
+                for m in prs_dataset.prs_ids
+            ]
+        )
     else:
         prs_df = None
-
-    if other_models is not None:
-        prs_df = pd.concat(
-            [prs_df, other_models.loc[mask, :].reset_index(drop=True)], axis=1
+        base_meta = pd.DataFrame(
+            columns=[
+                "model_id",
+                "model_name",
+                "prediction_type",
+                "model_category",
+                "train_biobank",
+                "train_source",
+            ]
         )
+
+    if fitted_models is not None:
+        fitted_df = fitted_models.loc[mask, :].reset_index(drop=True)
+        if prs_df is None:
+            prs_df = fitted_df
+        else:
+            prs_df = pd.concat([prs_df, fitted_df], axis=1)
 
     if prs_df is None:
         raise ValueError("No models to evaluate!")
@@ -200,12 +277,7 @@ def evaluate_prs_models(
     # --------------------------------------------------------------------------
     # Extract the covariates (if the metric requires them):
 
-    if any(
-        [
-            m in metrics
-            for m in ("Incremental_R2", "Partial_CORR", "Liability_R2", "Nagelkerke_R2")
-        ]
-    ):
+    if any([m in metric_names for m in INCREMENTAL_METRICS]):
         covar = pd.DataFrame(prs_dataset.get_covariates()[mask, :])
 
         # Remove invariant columns from the covariates:
@@ -216,102 +288,129 @@ def evaluate_prs_models(
 
     # --------------------------------------------------------------------------
 
-    pgs_cols = [c for c in prs_df.columns if not c.endswith("__NULL")]
-    metrics_df = pd.DataFrame({"PGS": pgs_cols})
+    model_ids = list(prs_df.columns)
+    meta_df = base_meta
+    if model_catalog is not None and len(model_catalog) > 0:
+        meta_df = pd.concat([meta_df, model_catalog], ignore_index=True)
+    if len(meta_df) > 0:
+        meta_df = meta_df.drop_duplicates(subset=["model_id"], keep="first")
 
-    for metric in metrics:
-        metrics_df[metric] = np.nan
-        pgs_metrics = []
-        pgs_err = []
+    records = []
 
-        for pgs in pgs_cols:
-            # Keep only records with valid PGS values:
-            keep = ~np.isnan(prs_df[pgs].values)
-            n = keep.sum()
-            pgs_values = prs_df[pgs].values[keep]
-            phenotype_values = phenotype[keep]
+    for model_id in model_ids:
+        # Keep only records with valid PGS values:
+        keep = ~np.isnan(prs_df[model_id].values)
+        n = int(keep.sum())
+        if n < min_group_size:
+            continue
 
-            if n < min_group_size:
-                pgs_metrics.append(np.nan)
-                if metric in (
-                    "Incremental_R2",
-                    "Matched_Incremental_R2",
-                    "Liability_R2",
-                    "Nagelkerke_R2",
-                ):
-                    pgs_err.append(np.nan)
-                continue
+        phenotype_values = phenotype[keep]
+        pred_values = prs_df[model_id].values[keep]
+        row_meta = (
+            meta_df[meta_df["model_id"] == model_id].iloc[0].to_dict()
+            if len(meta_df[meta_df["model_id"] == model_id]) > 0
+            else _parse_model_id(model_id)
+        )
 
-            if metric == "CORR":
-                pgs_metrics.append(pearson_r(phenotype_values, pgs_values))
-            elif metric == "MSE":
-                pgs_metrics.append(mse(phenotype_values, pgs_values))
-            elif metric == "AVG_PREC_TOP5":
-                pgs_metrics.append(
-                    average_precision_at_top_percentile(
-                        phenotype_values, pgs_values, percentile=0.05
-                    )
+        for metric in metric_names:
+            if metric in INCREMENTAL_METRICS:
+                value = EVAL_METRICS[metric](
+                    phenotype_values, pred_values, covar.loc[keep, :]
                 )
-            elif metric == "Incremental_R2":
-                pgs_metrics.append(
-                    incremental_r2(phenotype_values, pgs_values, covar.loc[keep, :])
-                )
-            elif metric == "Matched_Incremental_R2":
-                null_col = pgs + "__NULL"
-                if null_col not in prs_df.columns:
-                    pgs_metrics.append(np.nan)
-                    pgs_err.append(np.nan)
-                else:
-                    full_vals = pgs_values
-                    null_vals = prs_df[null_col].values[keep]
+            else:
+                value = EVAL_METRICS[metric](phenotype_values, pred_values)
 
-                    pgs_metrics.append(
-                        incremental_r2_matched_null(
-                            phenotype_values, full_vals, null_vals, covar.loc[keep, :]
-                        )
-                    )
-
-                    try:
-                        pgs_err.append(r2_stats(pgs_metrics[-1], n)["SE"])
-                    except AssertionError:
-                        pgs_err.append(0.0)
-            elif metric == "Partial_CORR":
-                pgs_metrics.append(
-                    partial_correlation(
-                        phenotype_values, pgs_values, covar.loc[keep, :]
-                    )
-                )
-            elif metric in ("ROC_AUC", "PR_AUC"):
-                if phenotype_values.sum() in (0, phenotype_values.shape[0]):
-                    pgs_metrics.append(np.nan)
-                else:
-                    if metric == "ROC_AUC":
-                        pgs_metrics.append(roc_auc(phenotype_values, pgs_values))
-                    else:
-                        pgs_metrics.append(pr_auc(phenotype_values, pgs_values))
-            elif metric == "Liability_R2":
-                pgs_metrics.append(
-                    liability_r2(phenotype_values, pgs_values, covar.loc[keep, :])
-                )
-            elif metric == "Nagelkerke_R2":
+            se = np.nan
+            if "R2" in metric:
                 try:
-                    pgs_metrics.append(
-                        nagelkerke_r2(phenotype_values, pgs_values, covar.loc[keep, :])
-                    )
-                except Exception:
-                    pgs_metrics.append(0.0)
-
-            if metric in ("Incremental_R2", "Liability_R2", "Nagelkerke_R2"):
-                try:
-                    pgs_err.append(r2_stats(pgs_metrics[-1], n)["SE"])
+                    se = r2_stats(value, n)["SE"]
                 except AssertionError:
-                    pgs_err.append(0.0)
+                    se = 0.0
 
-        metrics_df[metric] = pgs_metrics
-        if len(pgs_err) > 0:
-            metrics_df[f"{metric}_err"] = pgs_err
+            records.append(
+                {
+                    **row_meta,
+                    "metric": metric,
+                    "metric_kind": "base",
+                    "ref_model_id": None,
+                    "ref_model_name": None,
+                    "value": value,
+                    "se": se,
+                    "n": n,
+                    "eval_category": eval_category,
+                    "eval_group": eval_group,
+                }
+            )
 
-    return metrics_df
+            # Additional incremental layer vs reference model:
+            if (
+                metric in INCREMENTAL_METRICS
+                and ref_model_id is not None
+                and ref_model_id in model_ids
+                and model_id != ref_model_id
+                and row_meta.get("prediction_type", "full") == "full"
+            ):
+                ref_keep = ~np.isnan(prs_df[ref_model_id].values)
+                keep_both = keep & ref_keep
+                n_both = int(keep_both.sum())
+                if n_both >= min_group_size:
+                    try:
+                        delta_val = incremental_r2_from_predictions(
+                            phenotype[keep_both],
+                            prs_df[model_id].values[keep_both],
+                            prs_df[ref_model_id].values[keep_both],
+                            metric=metric,
+                        )
+                    except Exception as e:
+                        continue
+                    ref_meta = (
+                        meta_df[meta_df["model_id"] == ref_model_id].iloc[0].to_dict()
+                        if len(meta_df[meta_df["model_id"] == ref_model_id]) > 0
+                        else _parse_model_id(ref_model_id)
+                    )
+                    delta_se = np.nan
+                    if "R2" in metric:
+                        try:
+                            delta_se = r2_stats(delta_val, n_both)["SE"]
+                        except AssertionError:
+                            delta_se = 0.0
+                    records.append(
+                        {
+                            **row_meta,
+                            "metric": metric,
+                            "metric_kind": "incremental_vs_ref",
+                            "ref_model_id": ref_model_id,
+                            "ref_model_name": ref_meta.get("model_name"),
+                            "value": delta_val,
+                            "se": delta_se,
+                            "n": n_both,
+                            "eval_category": eval_category,
+                            "eval_group": eval_group,
+                        }
+                    )
+
+    if len(records) == 0:
+        return pd.DataFrame(
+            columns=[
+                "model_id",
+                "model_name",
+                "prediction_type",
+                "model_category",
+                "train_biobank",
+                "train_source",
+                "metric",
+                "metric_kind",
+                "ref_model_id",
+                "ref_model_name",
+                "value",
+                "se",
+                "n",
+                "eval_category",
+                "eval_group",
+            ]
+        )
+
+    return pd.DataFrame(records)
 
 
 if __name__ == "__main__":
@@ -412,18 +511,21 @@ if __name__ == "__main__":
     print(f"> Loading trained models from: {trained_models_path}")
 
     trained_models = {}
+    model_catalog = []
+    test_biobank = osp.basename(osp.dirname(args.test_data))
 
     for f in glob.glob(trained_models_path):
-        if "scaler" in f.lower():
-            continue  # skip scaler for pt
-
-        model_name = osp.basename(f).replace(".pkl", "")
+        model_basename = osp.basename(f).replace(".pkl", "")
         split_fname = f.split("/")
         model_prefix = split_fname[-3] + "/" + split_fname[-2] + ":"
-        model_name = model_prefix + model_name
+        model_name = model_prefix + model_basename
+        model_catalog.append(_parse_model_id(model_name))
 
         if "moe" in model_name.lower():
-            trained_models[model_name] = MoEPRS.from_saved_model(f)
+            if "torch" in model_name.lower():
+                trained_models[model_name] = TorchMoEPRS.from_saved_model(f)
+            else:
+                trained_models[model_name] = MoEPRS.from_saved_model(f)
         elif "AncestryWeightedPRS" in model_name:
             trained_models[model_name] = AncestryWeightedPRS.from_saved_model(f)
         elif "SexMatchedPRS" in model_name:
@@ -431,30 +533,21 @@ if __name__ == "__main__":
         else:
             trained_models[model_name] = MultiPRS.from_saved_model(f)
 
-    if args.model_source is None:
-        pt_glob = osp.join(trained_models_root, "*", "*", "MoE-PyTorch.pt")
-    else:
-        pt_glob = osp.join(
-            trained_models_root, "*", f"{args.model_source}", "MoE-PyTorch.pt"
-        )
-
-    for f in glob.glob(pt_glob):
-        # mirror the naming pattern used for .pkl models
-        split_fname = f.split("/")
-        model_prefix = split_fname[-3] + "/" + split_fname[-2] + ":"
-        model_name = model_prefix + "MoE-PyTorch"
-
-        trained_models[model_name] = load_model_any(
-            prs_dataset,
-            f,
-        )
-
     if len(trained_models) == 0:
         raise FileNotFoundError(f"No trained models found in {trained_models_path}")
+
+    model_catalog = pd.DataFrame(model_catalog).drop_duplicates(
+        subset=["model_id"], keep="first"
+    )
+    ref_model_id = _resolve_reference_model_id(
+        model_catalog, test_biobank=test_biobank, ref_model_name="Covariates"
+    )
 
     eval_df = stratified_evaluation(
         prs_dataset,
         trained_models,
+        model_catalog=model_catalog,
+        ref_model_id=ref_model_id,
         cat_group_cols=args.cat_group_cols,
         cont_group_cols=args.cont_group_cols,
         cont_group_bins=args.cont_group_bins,
@@ -462,6 +555,11 @@ if __name__ == "__main__":
         pc_clusters=args.pc_clusters,
         min_group_size=args.min_group_size,
     )
+
+    # Canonical test metadata for downstream plotting/filtering.
+    eval_df["analysis_id"] = args.test_data.split("/")[-3]
+    eval_df["test_biobank"] = test_biobank
+    eval_df["test_dataset"] = osp.basename(args.test_data).replace(".pkl", "")
 
     eval_root = "evaluation"
     if args.trained_models_suffix and len(args.trained_models_suffix.strip()) > 0:

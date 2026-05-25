@@ -11,12 +11,11 @@ parent_dir = osp.dirname(osp.dirname(osp.abspath(__file__)))
 sys.path.append(parent_dir)
 sys.path.append(osp.join(parent_dir, "model/"))
 
-# Torch/Lightning only needed for .pt
+
 from gate_interpretation import plot_expert_weights
 from moe import MoEPRS
-from moe_pytorch import Lit_MoEPRS
-from moe_pytorch_inference import load_model_any
-from plot_utils import GROUP_MAP, MODEL_NAME_MAP, sort_groups
+from moe_pytorch import TorchMoEPRS
+from plot_utils import SEX_LABEL_MAP, MODEL_NAME_MAP, sort_groups
 from PRSDataset import PRSDataset
 
 
@@ -73,7 +72,7 @@ def plot_admixture_graphs(
                 proba[group_col]
                 .astype(int)
                 .astype(str)
-                .map(GROUP_MAP)
+                .map(SEX_LABEL_MAP)
                 .fillna(proba[group_col])
             )
 
@@ -139,17 +138,17 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--model",
-        dest="model",
+        dest="model_path",
         type=str,
         required=True,
-        help="Path to trained model: either .pkl (MoEPRS) or .pt (MoE-PyTorch.pt).",
+        help="Path to trained model.",
     )
     parser.add_argument(
         "--dataset",
         dest="dataset",
         type=str,
         required=True,
-        help="Path to harmonized PRSDataset .pkl.",
+        help="Path to harmonized PRSDataset.",
     )
     parser.add_argument(
         "--group-col",
@@ -181,13 +180,6 @@ if __name__ == "__main__":
         default=False,
         help="Subsample within large groups for cleaner sort plots.",
     )
-    parser.add_argument(
-        "--torch-batch-size",
-        dest="torch_batch_size",
-        type=int,
-        default=65536,
-        help="Batch size when computing gate probs for .pt models.",
-    )
 
     args = parser.parse_args()
 
@@ -197,30 +189,29 @@ if __name__ == "__main__":
 
     analysis_id = args.dataset.split("/")[2]
 
-    moe_like = load_model_any(
-        p_dataset,
-        args.model,
-        gate_batch_size=args.torch_batch_size,
-    )
+    try:
+        moe_model = TorchMoEPRS.from_saved_model(args.model_path)
+    except Exception as e:
+        moe_model = MoEPRS.from_saved_model(args.model_path)
 
     # mirror your previous output folder logic
     data_path = args.dataset.replace(
         "data/harmonized_data", "figures/admixture_graphs"
     ).replace(".pkl", "")
     model_path = "_".join(
-        args.model.replace(".pkl", "").replace(".pt", "").split("/")[-3:]
+        args.model_path.replace(".pkl", "").split("/")[-3:]
     )
 
     makedir(data_path)
 
     if args.group_col is None:
         plot_output_file = osp.join(data_path, model_path + args.extension)
-        plot_admixture_graphs(p_dataset, moe_like, output_file=plot_output_file)
+        plot_admixture_graphs(p_dataset, moe_model, output_file=plot_output_file)
     else:
         for gcol in args.group_col:
             plot_admixture_graphs(
                 p_dataset,
-                moe_like,
+                moe_model,
                 group_col=gcol,
                 output_file=osp.join(
                     data_path, model_path + f"_{gcol}{args.extension}"

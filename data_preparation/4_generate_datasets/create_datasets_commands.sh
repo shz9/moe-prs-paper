@@ -30,3 +30,15 @@ do
         done
     done
 done
+
+# ----------------------------------------------------------------------
+# Create control datasets with non-informative PRSs:
+python data_preparation/4_generate_datasets/create_control_datasets.py \
+    --analysis-file tables/multitrait_prs_table.csv \
+    --analyses CAD_MT,T2D_MT,HTN_MT,STR_MT,HF_MT \
+    --biobank ukbb \
+    --output-file tables/control_multitrait_prs_table.csv \
+    --pcs-source "1kghdp" \
+    --prop-test "$prop_test" \
+    --create-harmonized-datasets \
+    --target-biobanks ukbb cartagene

@@ -36,10 +36,12 @@ if __name__ == "__main__":
         phenotype = ANALYSIS_TO_PHENOTYPE_MAP.get(analysis_id, analysis_id)
         biobank = BIOBANK_NAME_MAP_SHORT.get(biobank, biobank)
 
-        makedir("figures/gate_parameters/")
+        makedir(f"figures/gate_parameters/{args.moe_model}")
 
         title = f"Learned gate parameters for {phenotype} ({biobank})"
-        output_f = f"figures/gate_parameters/{analysis_id}_{biobank}.eps"
+        output_f = (
+            f"figures/gate_parameters/{args.moe_model}/{analysis_id}_{biobank}.eps"
+        )
 
         print(f"> Processing model: {f}")
         model = MoEPRS.from_saved_model(f)

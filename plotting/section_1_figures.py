@@ -20,11 +20,10 @@ from plot_predictive_performance import postprocess_metrics_df
 from plot_utils import (
     ANALYSIS_TO_PHENOTYPE_MAP,
     BIOBANK_NAME_MAP_SHORT,
-    GROUP_MAP,
+    SEX_LABEL_MAP,
     assign_ancestry_consistent_colors,
-    read_eval_metrics,
+    read_transform_eval_metrics,
     sort_groups,
-    transform_eval_metrics,
 )
 from PRSDataset import PRSDataset
 
@@ -245,10 +244,10 @@ def extract_stratified_evaluation_metrics(
     dat.data["Ancestry+Sex"] = (
         dat.data["Ancestry"]
         + "-"
-        + dat.data["Sex"].astype(int).astype(str).map(GROUP_MAP)
+        + dat.data["Sex"].astype(int).astype(str).map(SEX_LABEL_MAP)
     )
     dat.data["Sex+Age"] = (
-        dat.data["Sex"].astype(int).astype(str).map(GROUP_MAP)
+        dat.data["Sex"].astype(int).astype(str).map(SEX_LABEL_MAP)
         + "\n("
         + np.array(["Age<=55", "Age>55"]).take(
             dat.get_data_columns("Age").flatten() > 55
@@ -362,29 +361,25 @@ def extract_accuracy_data(
         # Extract accuracy metrics:
         f = f"data/evaluation/{pheno}/{test_biobank}/test_data.csv"
         try:
-            df = transform_eval_metrics(read_eval_metrics(f))
+            df = read_transform_eval_metrics(f)
         except Exception as e:
             print(e)
             continue
 
         df = df.loc[
-            (df["Model Category"] != "MoE")
-            | df["Model Name"].isin(
+            (df["model_category"] != "MoE")
+            | df["model_name"].isin(
                 [  # f'MoE-CFG ({args.biobank})',
-                    f"{args.moe_model} ({train_biobank})"
+                    f"{args.moe_model}"
                 ]
             )
         ]
-
-        df["Model Name"] = df["Model Name"].str.replace(
-            f" ({train_biobank})", "", regex=False
-        )
-        df["Model Name"] = df["Model Name"].str.replace(
+        df["model_name"] = df["model_name"].str.replace(
             f"{args.moe_model}", "MoEPRS", regex=False
         )
 
         if restrict_to_same_biobank:
-            df = df.loc[df["Training biobank"] == df["Test biobank"]]
+            df = df.loc[df["train_biobank"] == df["test_biobank"]]
 
         df = postprocess_metrics_df(
             df,
@@ -407,7 +402,7 @@ def plot_phenotypic_variance(pheno, biobank="ukbb"):
         f"data/harmonized_data/{pheno}/{biobank}/full_data.pkl"
     )
 
-    dataset.data["SexG"] = dataset.data["Sex"].astype(int).astype(str).map(GROUP_MAP)
+    dataset.data["SexG"] = dataset.data["Sex"].astype(int).astype(str).map(SEX_LABEL_MAP)
     dataset.data["AgeGroup2"] = np.array(["Age<=55", "Age>55"]).take(
         dataset.get_data_columns("Age").flatten() > 55
     )

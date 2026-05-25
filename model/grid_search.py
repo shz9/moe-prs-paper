@@ -392,6 +392,16 @@ def custom_cv_grid_search(
         cluster_fn=cluster_fn,
     )
 
+    # ----------------------------------------------------
+    # Update the evaluation metric based on phenotype likelihood:
+
+    if (
+        evaluation_metric == "Incremental_R2"
+        and dataset.phenotype_likelihood == "binomial"
+    ):
+        evaluation_metric = "Nagelkerke_R2"
+
+    # ----------------------------------------------------
     # build parameter grid
     grid = list(ParameterGrid(param_grid))
     if not grid:

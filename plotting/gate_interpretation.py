@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from plot_utils import (
-    GROUP_MAP,
+    SEX_LABEL_MAP,
     MODEL_NAME_MAP,
     assign_models_consistent_colors,
 )

@@ -8,8 +8,11 @@ parent_dir = osp.dirname(osp.dirname(osp.abspath(__file__)))
 sys.path.append(parent_dir)
 sys.path.append(osp.join(parent_dir, "model/"))
 
-from model_utils import get_analysis_id_mapper, get_model_name_mapper
-from model_utils import get_analysis_to_table_mapper
+from model_utils import (
+    get_analysis_id_mapper,
+    get_analysis_to_table_mapper,
+    get_model_name_mapper,
+)
 
 # --------------------------------------------------------
 
@@ -19,7 +22,7 @@ ANALYSIS_TO_PHENOTYPE_MAP = get_analysis_id_mapper(target_col="Phenotype")
 ANALYSIS_TO_SHORT_PHENOTYPE_MAP = get_analysis_id_mapper(target_col="Phenotype_short")
 ANALYSIS_TO_TABLE_MAP = get_analysis_to_table_mapper()
 
-GROUP_MAP = {"0": "Female", "1": "Male"}
+SEX_LABEL_MAP = {"0": "Female", "1": "Male"}
 
 # --------------------------------------------------------
 
@@ -120,6 +123,22 @@ CARTAGENE_SORTED_UMAP_CLUSTERS = [
 ]
 
 # --------------------------------------------------------
+
+METRIC_NAME_MAP = {
+    "Incremental_R2": "Incremental $R^2$",
+    "Liability_R2": "Liability $R^2$",
+    "Nagelkerke_R2": "Nagelkerke $R^2$",
+    "CoxSnell_R2": "Cox-Snell $R^2",
+    "McFadden_R2": "McFadden $R^2",
+    "Liability_Probit_R2": "Liability $R^2",
+    "Liability_Logit_R2": "Liability $R^2",
+    "ROC_AUC": "ROC AUC",
+    "PR_AUC": "PR AUC",
+    "Pearson_R": "Pearson $R$",
+    "Partial_Correlation": "Partial Pearson $R$",
+}
+
+# --------------------------------------------------------
 # Helper functions:
 
 
@@ -201,110 +220,180 @@ def sort_groups(groups):
         return sorted(groups)
 
 
-def read_eval_metrics(file_path):
-    """
-    Read the evaluation metrics from a CSV file and transform the names
-    of the models + the phenotype for the purposes of plotting.
-    """
+def read_transform_eval_metrics(file_path):
 
     eval_df = pd.read_csv(file_path)
-    analysis_id = file_path.split("/")[-3]
 
-    eval_df["AnalysisID"] = analysis_id
-    eval_df["Phenotype"] = ANALYSIS_TO_PHENOTYPE_MAP.get(analysis_id, analysis_id)
-    eval_df["Test biobank"] = file_path.split("/")[-2].upper()
+    analysis_id = eval_df["analysis_id"].iloc[0] if len(eval_df) > 0 else None
+    name_map = MODEL_NAME_MAP.get(analysis_id, {})
 
-    return eval_df
+    required = [
+        "analysis_id",
+        "test_biobank",
+        "test_dataset",
+        "model_id",
+        "model_name",
+        "prediction_type",
+        "model_category",
+        "train_biobank",
+        "train_source",
+        "metric",
+        "metric_kind",
+        "value",
+        "se",
+        "n",
+        "eval_category",
+        "eval_group",
+    ]
+    missing = [c for c in required if c not in eval_df.columns]
+    if missing:
+        raise ValueError(
+            f"Expected long-format evaluation file. Missing columns: {missing}"
+        )
 
-
-def transform_eval_metrics(eval_df):
-    # ----------------------------------------------------------------------
-    # Extract details about the training cohort / PGS:
-    def process_pgs(x, analysis_id):
-        NEW_MAP = MODEL_NAME_MAP.get(analysis_id, {})
-
-        result = {
-            "Training biobank": None,
-            "Training dataset": None,
-            "Training cohort": None,
-            "Model Name": x,
-            "Model Category": None,
-        }
-
-        # Parse biobank and model key from "biobank/dataset:model" format
-        try:
-            split_slash = x.split("/")
-            if len(split_slash) > 1:
-                biobank = split_slash[0]
-                result["Training biobank"] = biobank.upper()
-                rest = split_slash[1]
-            else:
-                biobank = None
-                rest = x
-
-            split_colon = rest.split(":")
-            if len(split_colon) > 1:
-                result["Training dataset"] = split_colon[0]
-                m_raw = split_colon[1]
-            else:
-                m_raw = rest
-
-            # Strip "-covariates" suffix to get the base model key
-            if m_raw in (pd.Series(NEW_MAP.keys()) + "-covariates").values:
-                m = m_raw.replace("-covariates", "")
-            else:
-                m = m_raw
-
-            # Resolve model name from map
-            mapped_name = NEW_MAP.get(m, m)
-            result["Training cohort"] = mapped_name
-            result["Model Name"] = mapped_name + (f" ({biobank})" if biobank else "")
-
-        except (ValueError, AttributeError):
-            result["Model Name"] = NEW_MAP.get(x, x)
-            result["Training cohort"] = NEW_MAP.get(x, x)
-
-        # Assign model category from the resolved model name
-        model_name = result["Model Name"]
-        if "MoE" in model_name:
-            result["Model Category"] = "MoE"
-        elif "MultiPRS" in model_name:
-            result["Model Category"] = "MultiPRS"
-        elif "AncestryWeightedPRS" in model_name:
-            result["Model Category"] = "AncestryWeightedPRS"
-        elif "SexMatchedPRS" in model_name:
-            result["Model Category"] = "AttributePartitionedPRS"
-        elif "Covariates" in model_name:
-            result["Model Category"] = "Covariates"
-        elif "Random" in model_name:
-            result["Model Category"] = "Random"
-        elif "covariates" in model_name:
-            result["Model Category"] = "SinglePRS+Covariates"
-        else:
-            result["Model Category"] = "SinglePRS"
-
-        return pd.Series(result)
-
-    eval_df[
-        [
-            "Training biobank",
-            "Training dataset",
-            "Training cohort",
-            "Model Name",
-            "Model Category",
-        ]
-    ] = eval_df.apply(lambda row: process_pgs(row["PGS"], row["AnalysisID"]), axis=1)
+    eval_df["phenotype"] = eval_df["analysis_id"].map(
+        lambda x: ANALYSIS_TO_PHENOTYPE_MAP.get(x, x)
+    )
+    eval_df["model_name"] = eval_df["model_name"].map(lambda x: name_map.get(x, x))
 
     # ----------------------------------------------------------------------
-    # Clean up the names of the evaluation cohorts:
+    # Clean up names of evaluation cohorts:
 
-    def map_group_name(x):
+    def map_sex_label(x):
         try:
-            return GROUP_MAP[x]
+            return SEX_LABEL_MAP[x]
         except Exception:
             return x
 
-    eval_df["EvalGroup"] = eval_df["EvalGroup"].astype(str).apply(map_group_name)
-    eval_df.rename(columns={"EvalGroup": "Evaluation Group"}, inplace=True)
+    eval_df["eval_group"] = eval_df["eval_group"].astype(str).apply(map_sex_label)
 
     return eval_df
+
+
+def postprocess_metrics_df(
+    metrics_df,
+    metric,
+    metric_kind="base",
+    category="Ancestry",
+    min_sample_size=100,
+    aggregate_single_prs=True,
+    include_cohort_matched=False,
+):
+
+    # Sanity checks:
+    assert metric_kind in ("incremental_vs_ref", "base")
+
+    # ------------------------------------------------------
+    # Filter by metric from long-format table
+    sub_metrics_df = metrics_df.loc[
+        (metrics_df["metric"] == metric)
+        & (metrics_df["metric_kind"] == metric_kind)
+        & (
+            metrics_df["model_category"].isin(["SinglePRS", "Covariates"])
+            | (
+                metrics_df["prediction_type"]
+                == ["prs_only", "full"][metric_kind == "incremental_vs_ref"]
+            )
+        )
+    ].copy()
+
+    # ------------------------------------------------------
+    # Transform to wide-table format:
+
+    sub_metrics_df[metric] = sub_metrics_df["value"]
+    sub_metrics_df[f"{metric}_err"] = sub_metrics_df["se"]
+
+    bb_suffix = (
+        sub_metrics_df["train_biobank"]
+        .map(lambda x: BIOBANK_NAME_MAP_SHORT.get(x, x) if pd.notna(x) else x)
+        .astype("string")
+    )
+    model_name_with_source = sub_metrics_df["model_name"].astype("string")
+    has_source = bb_suffix.notna() & (bb_suffix.str.len() > 0)
+    sub_metrics_df["Model Name"] = model_name_with_source
+    sub_metrics_df.loc[has_source, "Model Name"] = (
+        model_name_with_source[has_source] + " (" + bb_suffix[has_source] + ")"
+    )
+
+    sub_metrics_df["Evaluation Group"] = sub_metrics_df["eval_group"]
+    sub_metrics_df["PGS"] = sub_metrics_df["model_id"]
+
+    # ------------------------------------------------------
+    # Filter the metrics dataframe:
+    sub_metrics_df = sub_metrics_df.loc[
+        sub_metrics_df.eval_category.isin([category, "All"])
+    ]
+    # Remove entries with tiny sample sizes:
+    sub_metrics_df = sub_metrics_df.loc[sub_metrics_df.n >= min_sample_size]
+    # Remove entries with NaNs:
+    sub_metrics_df = sub_metrics_df.loc[~sub_metrics_df["value"].isna()]
+
+    # ------------------------------------------------------
+    # Filter based on model categories:
+    if "SinglePRS+Covariates" in sub_metrics_df["model_category"].unique():
+        single_model_label = "SinglePRS+Covariates"
+    else:
+        single_model_label = "SinglePRS"
+
+    model_cats = [
+        "MoE",
+        "MultiPRS",
+        "AncestryWeightedPRS",
+        "AttributePartitionedPRS",
+        single_model_label,
+    ]
+
+    if metric in ("PR_AUC", "ROC_AUC", "MSE", "Pearson_R"):
+        model_cats.append("Covariates")
+
+    sub_metrics_df = sub_metrics_df.loc[
+        sub_metrics_df["model_category"].isin(model_cats)
+    ]
+
+    # ------------------------------------------------------
+    # Include cohort-matched PRS
+
+    if include_cohort_matched:
+        mask = (sub_metrics_df["model_category"] == single_model_label) & (
+            sub_metrics_df["eval_group"] == sub_metrics_df["model_name"]
+        )
+
+        if mask.sum() > 1:
+
+            matched_df = sub_metrics_df.loc[mask].copy()
+            matched_df["model_name"] = f"{category}-matched PRS"
+            matched_df["Model Name"] = f"{category}-matched PRS"
+
+            sub_metrics_df = pd.concat(
+                [matched_df.reset_index(drop=True), sub_metrics_df.reset_index(drop=True)],
+                ignore_index=True,
+            )
+
+    # ------------------------------------------------------
+    # Aggregate single-source PRS:
+    if aggregate_single_prs:
+        # Get entries for SinglePRS methods:
+        mask = (sub_metrics_df["model_category"] == single_model_label) & (
+            sub_metrics_df["Model Name"] != f"{category}-matched PRS"
+        )
+
+        if mask.sum() > 1:
+            grouped = sub_metrics_df.loc[mask].groupby("eval_group")
+            if metric.endswith("MSE"):
+                single_prs_agg = grouped.apply(lambda x: x.loc[x["value"].idxmin()])
+            else:
+                single_prs_agg = grouped.apply(lambda x: x.loc[x["value"].idxmax()])
+
+            single_prs_agg = single_prs_agg.reset_index(drop=True)
+            single_prs_agg["model_name"] = "Best Single Source PRS"
+            single_prs_agg["Model Name"] = "Best Single Source PRS"
+
+            sub_metrics_df = pd.concat(
+                [
+                    single_prs_agg.reset_index(drop=True),
+                    sub_metrics_df.loc[~mask].reset_index(drop=True),
+                ],
+                ignore_index=True,
+            )
+
+    return sub_metrics_df

@@ -1,8 +1,6 @@
-import copy
 import glob
 import os
 import os.path as osp
-import pickle
 import threading
 import time
 from functools import lru_cache
@@ -11,9 +9,7 @@ import numpy as np
 import pandas as pd
 import psutil
 import torch
-from moe_pytorch import Lit_MoEPRS
 from sklearn.preprocessing import StandardScaler
-from torch.utils.data import DataLoader
 
 
 class Timer:
@@ -110,8 +106,6 @@ class PeakMemory:
         # Capture CUDA peak (allocated) if requested
         if self.track_gpu:
             try:
-                import torch
-
                 if torch.cuda.is_available():
                     self.peak_cuda_alloc_bytes = int(torch.cuda.max_memory_allocated())
             except Exception:
@@ -179,156 +173,62 @@ def subset_standard_scaler(scaler, keep_features):
     return new_scaler
 
 
+def serialize_standard_scaler(scaler):
+    if scaler is None:
+        return None
+    if not isinstance(scaler, StandardScaler):
+        raise TypeError(f"Unsupported scaler type: {type(scaler)}")
+
+    payload = {
+        "type": "StandardScaler",
+        "with_mean": bool(getattr(scaler, "with_mean", True)),
+        "with_std": bool(getattr(scaler, "with_std", True)),
+    }
+    for attr in (
+        "mean_",
+        "var_",
+        "scale_",
+        "n_features_in_",
+        "n_samples_seen_",
+        "feature_names_in_",
+    ):
+        if hasattr(scaler, attr):
+            value = getattr(scaler, attr)
+            if isinstance(value, np.ndarray):
+                payload[attr] = value.copy()
+            else:
+                payload[attr] = value
+    return payload
+
+
+def deserialize_standard_scaler(payload):
+    if payload is None:
+        return None
+    if not isinstance(payload, dict) or payload.get("type") != "StandardScaler":
+        raise ValueError("Malformed scaler payload.")
+
+    scaler = StandardScaler(
+        with_mean=payload.get("with_mean", True), with_std=payload.get("with_std", True)
+    )
+    for attr in (
+        "mean_",
+        "var_",
+        "scale_",
+        "n_features_in_",
+        "n_samples_seen_",
+        "feature_names_in_",
+    ):
+        if attr in payload:
+            setattr(scaler, attr, payload[attr])
+    return scaler
+
+
 def compare_scalers(scaler1, scaler2):
     return (
         np.allclose(scaler1.mean_, scaler2.mean_)
         and np.allclose(scaler1.var_, scaler2.var_)
         and np.allclose(scaler1.scale_, scaler2.scale_)
     )
-
-
-def apply_saved_scaler(prs_dataset, scaler_dir, scaler_name="MoE-PyTorch.scaler.pkl"):
-    """
-    Deep-copy prs_dataset and apply the training-time scaler if present.
-    """
-    d = copy.deepcopy(prs_dataset)
-    sp = osp.join(scaler_dir, scaler_name)
-    if osp.exists(sp):
-        with open(sp, "rb") as f:
-            scaler = pickle.load(f)
-        d.standardize_data(scaler=scaler, refit=False)
-    return d
-
-
-def load_lit_from_pt(prs_dataset, pt_path, map_location="cpu", strict=True):
-    """
-    Rebuild Lit_MoEPRS from checkpoint config, robust to global_head_bias changes.
-    """
-    ckpt = torch.load(pt_path, map_location=map_location, weights_only=False)
-    if "config" not in ckpt or "state_dict" not in ckpt:
-        raise ValueError(f"Malformed checkpoint (need config + state_dict): {pt_path}")
-
-    cfg = ckpt["config"]
-    state = ckpt["state_dict"]
-
-    # Robust inference so loading never depends on stale config defaults
-    use_global_head = cfg.get(
-        "use_global_head", any(k.startswith("global_head.") for k in state.keys())
-    )
-    global_head_bias = cfg.get("global_head_bias", ("global_head.bias" in state))
-    use_ard_bias = cfg.get(
-        "use_ard_bias", ("expert_bias" in state) or ("expert_bias_log_scale" in state)
-    )
-
-    group_getitem_cols = {
-        "phenotype": [prs_dataset.phenotype_col],
-        "gate_input": prs_dataset.covariates_cols,
-        "experts": prs_dataset.prs_cols,
-        "global_input": prs_dataset.covariates_cols,
-    }
-    if cfg.get("has_expert_covariates", False):
-        group_getitem_cols["expert_covariates"] = prs_dataset.covariates_cols
-
-    lit = Lit_MoEPRS(
-        group_getitem_cols=group_getitem_cols,
-        gate_model_layers=cfg["gate_model_layers"],
-        gate_add_batch_norm=cfg["gate_add_batch_norm"],
-        loss=cfg["loss"],
-        optimizer=cfg["optimizer"],
-        family=cfg["family"],
-        learning_rate=cfg["learning_rate"],
-        weight_decay=cfg["weight_decay"],
-        topk_k=cfg.get("topk_k", None),
-        tau_start=cfg.get("tau_start", 1.0),
-        tau_end=cfg.get("tau_end", 1.0),
-        hard_ste=cfg.get("hard_ste", True),
-        lb_coef=cfg.get("lb_coef", 0.0),
-        eps=cfg.get("eps", 1e-12),
-        use_ard_bias=use_ard_bias,
-        use_global_head=use_global_head,
-        global_head_bias=global_head_bias,
-        ent_coef=cfg.get("ent_coef_start", 0.0),
-        ent_coef_end=cfg.get("ent_coef_end", None),
-        ent_warm_epochs=cfg.get("ent_warm_epochs", 0),
-        ent_decay_epochs=cfg.get("ent_decay_epochs", 0),
-    )
-
-    # optional attrs used in forward
-    if cfg.get("min_sigma2", None) is not None:
-        lit.min_sigma2 = float(cfg["min_sigma2"])
-    if "expert_bias_scale_floor" in cfg:
-        lit.expert_bias_scale_floor = float(cfg["expert_bias_scale_floor"])
-
-    lit.load_state_dict(state, strict=strict)
-    lit.eval()
-    return lit
-
-
-class TorchMoEWrapper:
-    """inference wrapper around a trained Lit_MoEPRS model to expose predict and predict_proba methods"""
-
-    def __init__(self, lit_model, scaler_dir=None, batch_size=65536, device="cpu"):
-        self.lit_model = lit_model
-        self.scaler_dir = scaler_dir
-        self.batch_size = int(batch_size)
-        self.device = torch.device(device)
-
-        self.lit_model.to(self.device)
-        self.lit_model.eval()
-
-        # for compatibility with plotting code expecting model.expert_cols
-        self.expert_cols = self.lit_model.group_getitem_cols["experts"]
-
-    def _prep_dataset(self, prs_dataset):
-        d = (
-            apply_saved_scaler(prs_dataset, self.scaler_dir)
-            if self.scaler_dir
-            else copy.deepcopy(prs_dataset)
-        )
-
-        # Ensure dataset groups match training-time groups
-        expected = self.lit_model.group_getitem_cols
-        if not getattr(d, "group_getitem_cols", None):
-            d.set_group_getitem_cols(expected)
-        else:
-            for k, v in expected.items():
-                if k not in d.group_getitem_cols or d.group_getitem_cols[k] != v:
-                    d.set_group_getitem_cols(expected)
-                    break
-
-        d.set_backend("torch")
-        return d
-
-    def predict(self, prs_dataset):
-        d = self._prep_dataset(prs_dataset)
-        loader = DataLoader(d, batch_size=self.batch_size, shuffle=False)
-
-        outs = []
-        with torch.no_grad():
-            for batch in loader:
-                # move tensors to device
-                for k, v in batch.items():
-                    if torch.is_tensor(v):
-                        batch[k] = v.to(self.device)
-                yhat = self.lit_model.forward(batch)
-                outs.append(yhat.detach().cpu().numpy())
-
-        return np.concatenate(outs, axis=0)
-
-    def predict_proba(self, prs_dataset):
-        d = self._prep_dataset(prs_dataset)
-        loader = DataLoader(d, batch_size=self.batch_size, shuffle=False)
-
-        outs = []
-        with torch.no_grad():
-            for batch in loader:
-                for k, v in batch.items():
-                    if torch.is_tensor(v):
-                        batch[k] = v.to(self.device)
-                p = self.lit_model.gate_forward(batch)
-                outs.append(p.detach().cpu().numpy())
-
-        return np.concatenate(outs, axis=0)
 
 
 @lru_cache(maxsize=None)

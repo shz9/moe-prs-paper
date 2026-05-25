@@ -173,6 +173,80 @@ class PRSDataset(Dataset):
     def analysis_id(self):
         return self._analysis_id
 
+    @property
+    def continuous_cols(self):
+        """
+        Get a list of columns in data that have continuous values
+        """
+
+        return np.array(
+            [
+                c
+                for c in self.get_data_cols(exclude_meta=True)
+                if len(np.unique(self.data[c].values)) > 2
+            ]
+        )
+
+    @property
+    def binary_cols(self):
+        """
+        Get a list of columns in data that have binary values
+        """
+        np.array(
+            [
+                c
+                for c in self.get_data_cols(exclude_meta=True)
+                if c not in self.continuous_cols
+            ]
+        )
+
+    def add_covariates(self, covar_names, covar_values, overwrite=False):
+        """
+        Add covariates to the PRS dataset.
+        This is a utility method to add covariates and handle some of the
+        internal data wrangling and attribute setting, etc.
+        """
+
+        # Sample size check:
+        assert covar_values.shape[0] == self.N
+
+        # Type checking and conversion:
+        if isinstance(covar_names, str):
+            covar_names = [covar_names]
+
+        if isinstance(covar_values, pd.DataFrame):
+            covar_values = covar_values.values
+
+        if isinstance(covar_values, pd.Series):
+            covar_values = covar_values.values
+
+        # Check that we're not overwriting any data without user's permission:
+        if not overwrite and self.covariates_cols is not None:
+            if any([c in self.covariates_cols for c in covar_names]):
+                raise ValueError(
+                    "Some of the covariates already exist. Set overwrite=True or rename."
+                )
+
+        # Reshape:
+        if len(covar_values.shape) == 1:
+            covar_values = covar_values.reshape(-1, 1)
+
+        # Check matching between names and matrix shape:
+        assert len(covar_names) == covar_values.shape[1]
+
+        # Assign the new data to the dataframe:
+        self.data[covar_names] = covar_values
+
+        if self.covariates_cols is None:
+            self.covariates_cols = list(covar_names)
+        else:
+            self.covariates_cols = list(
+                set(self.covariates_cols).union(set(covar_names))
+            )
+
+        # Sort the covariates names for consistency:
+        self.covariates_cols = sorted(self.covariates_cols)
+
     def cache_data_matrix(self):
         """
         Cache ONLY the columns needed by group_getitem_cols as float32.
@@ -189,7 +263,7 @@ class PRSDataset(Dataset):
                     used.append(c)
                     used_set.add(c)
 
-        # sanity: all used columns must be numeric (for now atleast)
+        # sanity: all used columns must be numeric (for now at least)
         bad = [c for c in used if not pd.api.types.is_numeric_dtype(self.data[c])]
         if bad:
             raise ValueError(
@@ -245,33 +319,6 @@ class PRSDataset(Dataset):
         data_cols += [self.phenotype_col]
 
         return data_cols
-
-    @property
-    def continuous_cols(self):
-        """
-        Get a list of columns in data that have continuous values
-        """
-
-        return np.array(
-            [
-                c
-                for c in self.get_data_cols(exclude_meta=True)
-                if len(np.unique(self.data[c].values)) > 2
-            ]
-        )
-
-    @property
-    def binary_cols(self):
-        """
-        Get a list of columns in data that have binary values
-        """
-        np.array(
-            [
-                c
-                for c in self.get_data_cols(exclude_meta=True)
-                if c not in self.continuous_cols
-            ]
-        )
 
     def set_backend(self, new_backend):
         """
@@ -592,3 +639,122 @@ class PRSDataset(Dataset):
     def save(self, f):
         with open(f, "wb") as opf:
             pickle.dump(self, opf)
+
+
+def simulate_prs_dataset(
+    n_samples=5000,
+    n_prs=6,
+    n_covariates=5,
+    phenotype_likelihood="binomial",
+    analysis_id="simulated_analysis",
+    phenotype_col="Phenotype",
+    ancestry_col="Ancestry",
+    include_group_getitem_cols=True,
+    backend="numpy",
+    seed=8,
+):
+    """
+    Create a synthetic PRSDataset for quick model testing.
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of individuals.
+    n_prs : int
+        Number of PRS/expert columns to generate.
+    n_covariates : int
+        Number of continuous covariates to generate.
+    phenotype_likelihood : {"binomial", "gaussian"}
+        Type of phenotype to simulate.
+    analysis_id : str
+        Analysis ID for PRSDataset.
+    phenotype_col : str
+        Name of phenotype column.
+    ancestry_col : str
+        Name of ancestry column.
+    include_group_getitem_cols : bool
+        If True, populate default group_getitem_cols compatible with TorchMoEPRS.
+    backend : {"numpy", "torch"}
+        Backend for returned PRSDataset.
+    seed : int
+        RNG seed for reproducibility.
+    """
+
+    if phenotype_likelihood not in ("binomial", "gaussian"):
+        raise ValueError("phenotype_likelihood must be 'binomial' or 'gaussian'.")
+
+    rng = np.random.default_rng(seed)
+
+    # Metadata:
+    ids = np.arange(n_samples, dtype=np.int64)
+    ancestry_levels = np.array(["EUR", "AFR", "EAS", "SAS", "AMR"], dtype=object)
+    ancestry = ancestry_levels[rng.integers(0, len(ancestry_levels), size=n_samples)]
+
+    # Covariates:
+    cov_cols = [f"Covar_{i+1}" for i in range(n_covariates)]
+    X = rng.normal(0.0, 1.0, size=(n_samples, n_covariates)).astype(np.float64)
+    # Add a binary covariate often useful in tests.
+    sex = rng.integers(0, 2, size=n_samples).astype(np.float64)
+
+    # PRS features:
+    prs_cols = [f"PRS_{i+1}" for i in range(n_prs)]
+    W = rng.normal(0.0, 0.5, size=(n_covariates, n_prs))
+    noise = rng.normal(0.0, 1.0, size=(n_samples, n_prs))
+    P = (X.dot(W) + noise).astype(np.float64)
+
+    # Simulate gating + expert effects to build phenotype:
+    gate_beta = rng.normal(0.0, 0.4, size=(n_covariates, n_prs))
+    gate_logits = X.dot(gate_beta)
+    gate_logits = gate_logits - gate_logits.max(axis=1, keepdims=True)
+    gate_w = np.exp(gate_logits)
+    gate_w = gate_w / gate_w.sum(axis=1, keepdims=True)
+
+    expert_scale = rng.normal(0.8, 0.2, size=(n_prs,))
+    expert_lin = P * expert_scale.reshape(1, -1)
+    # Shared global covariate effect:
+    global_beta = rng.normal(0.0, 0.2, size=(n_covariates,))
+    global_lin = X.dot(global_beta)
+    mixture_lin = (gate_w * expert_lin).sum(axis=1) + global_lin + 0.1 * sex
+
+    if phenotype_likelihood == "binomial":
+        prob = 1.0 / (1.0 + np.exp(-mixture_lin))
+        y = rng.binomial(1, prob, size=n_samples).astype(np.float64)
+    else:
+        y = (mixture_lin + rng.normal(0.0, 1.0, size=n_samples)).astype(np.float64)
+
+    df = pd.DataFrame(
+        {
+            "IID": ids,
+            ancestry_col: ancestry,
+            "Sex": sex,
+            phenotype_col: y,
+        }
+    )
+    for j, c in enumerate(cov_cols):
+        df[c] = X[:, j]
+    for j, c in enumerate(prs_cols):
+        df[c] = P[:, j]
+
+    covariates_cols = ["Sex"] + cov_cols
+
+    group_getitem_cols = None
+    if include_group_getitem_cols:
+        group_getitem_cols = {
+            "phenotype": [phenotype_col],
+            "expert_predictions": list(prs_cols),
+            "gate_input": list(covariates_cols),
+            "global_covariates": list(covariates_cols),
+            "expert_covariates": list(covariates_cols),
+        }
+
+    return PRSDataset(
+        analysis_id=analysis_id,
+        dataframe=df,
+        phenotype_col=phenotype_col,
+        meta_cols=["IID", ancestry_col],
+        prs_cols=prs_cols,
+        covariates_cols=covariates_cols,
+        group_getitem_cols=group_getitem_cols,
+        phenotype_likelihood=phenotype_likelihood,
+        backend=backend,
+    )

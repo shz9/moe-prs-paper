@@ -21,11 +21,10 @@ from moe import MoEPRS
 from plot_pgs_admixture import plot_admixture_graphs
 from plot_predictive_performance import postprocess_metrics_df
 from plot_utils import (
-    ANALYSIS_TO_TABLE_MAP,
     ANALYSIS_TO_PHENOTYPE_MAP,
+    ANALYSIS_TO_TABLE_MAP,
     BIOBANK_NAME_MAP_SHORT,
-    read_eval_metrics,
-    transform_eval_metrics,
+    read_transform_eval_metrics,
 )
 from PRSDataset import PRSDataset
 
@@ -35,6 +34,7 @@ def extract_accuracy_data_all_phenotypes(
     biobank,
     dataset="test_data",
     analysis_table_id="multi_ancestry_prs_table",
+    binary_metric="Nagelkerke_R2",
     keep_analyses=None,
     exclude_analyses=None,
     exclude_all=True,
@@ -63,14 +63,6 @@ def extract_accuracy_data_all_phenotypes(
                 exclude_all=exclude_all,
             )
         )
-
-        if "Liability_R2" in analysis_results[-1].columns:
-            analysis_results[-1]["Incremental_R2"] = analysis_results[-1][
-                "Liability_R2"
-            ]
-            analysis_results[-1]["Incremental_R2_err"] = analysis_results[-1][
-                "Liability_R2_err"
-            ]
 
     df = pd.concat(analysis_results).reset_index(drop=True)
 
@@ -160,41 +152,36 @@ def extract_accuracy_data(
 ):
     # Extract accuracy metrics:
     f = f"data/evaluation/{analysis_id}/{test_biobank}/{dataset}.csv"
-    df = transform_eval_metrics(read_eval_metrics(f))
+    df = read_transform_eval_metrics(f)
 
     df = df.loc[
-        (df["Model Category"] != "MoE")
-        | df["Model Name"].isin(
+        (df["model_category"] != "MoE")
+        | df["model_name"].isin(
             [
-                f"{moe_model_name} (ukbb)",
-                f"{moe_model_name} (cartagene)",
+                f"{moe_model_name}",
             ]
         )
     ]
 
     df = df.loc[
-        df["Model Category"].isin(
+        df["model_category"].isin(
             ["MoE", "MultiPRS", "AncestryWeightedPRS"]
         )  # <- Ensemble model categories
-        | (df["Training biobank"] == test_biobank.upper())
+        | (df["train_biobank"] == test_biobank.upper())
     ]
 
     # Rename the ensemble models for clarity:
-    for m, m_new in {
-        moe_model_name: "MoEPRS",
-        "MultiPRS": "MultiPRS",
-        "AncestryWeightedPRS": "Ancestry-weighted PRS",
-    }.items():
-        df["Model Name"] = df["Model Name"].str.replace(
-            f"{m} (ukbb)", f"{m_new} (UKB)", regex=False
-        )
-        df["Model Name"] = df["Model Name"].str.replace(
-            f"{m} (cartagene)", f"{m_new} (CaG)", regex=False
-        )
+    df["model_name"] = df["model_name"].replace(
+        {
+            moe_model_name: "MoEPRS",
+            "MultiPRS": "MultiPRS",
+            "AncestryWeightedPRS": "Ancestry-weighted PRS",
+        }
+    )
 
     # Correction for binary phenotypes:
-    if metric == "Incremental_R2" and "Liability_R2" in df.columns:
-        metric = "Liability_R2"
+    if metric == "Incremental_R2" and "Nagelkerke_R2" in set(df["metric"].unique()):
+        metric = "Nagelkerke_R2"
 
     dfs = postprocess_metrics_df(
         df,
@@ -226,6 +213,17 @@ if __name__ == "__main__":
         type=str,
         default="MoE-GS",
         help="The name of the MoE model to plot as reference.",
+    )
+
+    parser.add_argument(
+        "--binary-metric",
+        dest="binary_metric",
+        type=str,
+        choices=
+        {"Liability_R2", "Nagelkerke_R2", "CoxSnell_R2","McFadden_R2",
+            "Liability_Probit_R2", "Liability_Logit_R2"},
+        default="Nagelkerke_R2",
+        help="The metric to plot for binary phenotypes.",
     )
 
     parser.add_argument(
@@ -280,6 +278,7 @@ if __name__ == "__main__":
         metrics_df = extract_accuracy_data_all_phenotypes(
             args.moe_model,
             biobank,
+            binary_metric=args.binary_metric,
             exclude_analyses=["LDL_ADJ_MA", "TC_ADJ_MA", "DBP_ADJ_MA", "SBP_ADJ_MA"],
         )
 
@@ -373,7 +372,8 @@ if __name__ == "__main__":
 
     for analysis_id in ANALYSIS_TO_PHENOTYPE_MAP.keys():
         if (
-            ANALYSIS_TO_PHENOTYPE_MAP.get(analysis_id, analysis_id) not in phenotype_order
+            ANALYSIS_TO_PHENOTYPE_MAP.get(analysis_id, analysis_id)
+            not in phenotype_order
             or ANALYSIS_TO_TABLE_MAP.get(analysis_id) == "multitrait_prs_table"
         ):
             continue

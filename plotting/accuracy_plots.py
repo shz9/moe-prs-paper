@@ -5,6 +5,8 @@ import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 
+from plot_utils import METRIC_NAME_MAP
+
 
 def plot_performance_metrics(metrics_df,
                              title=None,
@@ -170,12 +172,7 @@ def grouped_plot(metrics_df,
     ax.set_xlabel("Evaluation Group")
 
     try:
-        y_label = {"CORR": "Pearson Correlation",
-                   "Incremental_R2": "Incremental R-Squared",
-                   "MSE": "MSE",
-                   "Partial_CORR": "Partial Correlation",
-                   "Liability_R2": "Liability R-Squared",
-                   "Nagelkerke_R2": "Nagelkerke R-Squared"}[metric]
+        y_label = METRIC_NAME_MAP[metric]
     except KeyError:
         y_label = metric
 
@@ -191,4 +188,3 @@ def grouped_plot(metrics_df,
     else:
         plt.savefig(output_file)
         plt.close()
-

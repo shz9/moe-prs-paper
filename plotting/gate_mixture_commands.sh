@@ -35,7 +35,7 @@ do
 
   for dataset in data/harmonized_data/"$analysis"/"$train_biobank"/test_*.pkl
   do
-    for model in data/trained_models/"$analysis"/"$train_biobank"/*/Mo*.pkl
+    for model in data/trained_models/"$analysis"/"$train_biobank"/*/*MoE*.pkl
     do
       # Check that the model exists before invoking the plotting script:
       if [ ! -f "$model" ]; then

@@ -17,7 +17,8 @@ from error_bars import add_error_bars
 from evaluate_predictive_performance import stratified_evaluation
 from plot_utils import (
     BIOBANK_NAME_MAP_SHORT,
-    GROUP_MAP,
+    SEX_LABEL_MAP,
+    METRIC_NAME_MAP,
     MODEL_NAME_MAP,
     assign_models_consistent_colors,
 )
@@ -93,7 +94,7 @@ def extract_stratified_evaluation_metrics(
 
     # ----------------------------------------
     # Map sex labels from integers to strings:
-    dat.data["SexG"] = dat.data["Sex"].astype(int).astype(str).map(GROUP_MAP)
+    dat.data["SexG"] = dat.data["Sex"].astype(int).astype(str).map(SEX_LABEL_MAP)
 
     # ----------------------------------------
     # Add composite columns for stratification:
@@ -206,13 +207,7 @@ if __name__ == "__main__":
             )
 
             plt.xlabel("Evaluation Group")
-            plt.ylabel(
-                {
-                    "Incremental_R2": "Incremental $R^2$",
-                    "Liability_R2": "Liability $R^2$",
-                    "CORR": "Pearson $R$",
-                }[args.metric]
-            )
+            plt.ylabel(METRIC_NAME_MAP[args.metric])
 
             plt.tight_layout()
             plt.savefig(

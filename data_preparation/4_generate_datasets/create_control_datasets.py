@@ -22,6 +22,7 @@ def sample_noninformative_prs(
     sampling_subset=None,
     r2_threshold=0.001,
     random_state=None,
+    return_details=False,
 ):
     # ---------------------------------------------------------------------------------
     # Read the PGS scores:
@@ -80,37 +81,61 @@ def sample_noninformative_prs(
 
     # ---------------------------------------------------------------
     # Quantify the prediction accuracy of all the models:
+    from viprs.eval.binary_metrics import liability_r2
     from viprs.eval.continuous_metrics import incremental_r2
+
+    phenotype_vals = pd.to_numeric(m_df["phenotype"], errors="coerce").values
+    valid_pheno = ~np.isnan(phenotype_vals)
+    unique_pheno = np.unique(phenotype_vals[valid_pheno])
+
+    is_binary = len(unique_pheno) == 2
+    if is_binary:
+        # Robust 0/1 recoding for binary phenotypes (e.g. supports 1/2 coding).
+        unique_sorted = np.sort(unique_pheno)
+        phenotype_eval = np.where(phenotype_vals == unique_sorted[-1], 1.0, 0.0)
+        r2_metric_name = "Liability_R2"
+    else:
+        phenotype_eval = phenotype_vals
+        r2_metric_name = "Incremental_R2"
 
     acc_results = []
 
     for c in pgs_df.columns[2:]:
-        acc_results.append(
-            {
-                "Model": c,
-                "R2": incremental_r2(
-                    m_df["phenotype"].values, m_df[c].values, m_df[covariates_cols]
-                ),
-            }
-        )
+        try:
+            prs_vals = pd.to_numeric(m_df[c], errors="coerce").values
+            keep = valid_pheno & (~np.isnan(prs_vals))
+
+            if is_binary:
+                r2_val = liability_r2(
+                    phenotype_eval[keep], prs_vals[keep], m_df.loc[keep, covariates_cols]
+                )
+            else:
+                r2_val = incremental_r2(
+                    phenotype_eval[keep], prs_vals[keep], m_df.loc[keep, covariates_cols]
+                )
+        except Exception:
+            r2_val = np.nan
+
+        acc_results.append({"Model": c, "R2": r2_val})
 
     acc_results = pd.DataFrame(acc_results)
+    acc_results = acc_results.loc[~acc_results["R2"].isna()].copy()
 
     # ---------------------------------------------------------------
 
     # Filter scores to only keep ones that fall below the specified threshold:
-    acc_results = acc_results.loc[acc_results["R2"] < r2_threshold]
+    eligible_results = acc_results.loc[acc_results["R2"] < r2_threshold].copy()
 
-    if len(acc_results) < n_scores:
+    if len(eligible_results) < n_scores:
         raise ValueError(
-            f"Only {len(acc_results)} scores with R2 < {r2_threshold}; "
+            f"Only {len(eligible_results)} scores with R2 < {r2_threshold}; "
             f"cannot sample n_scores={n_scores}."
         )
 
     # Sample the number of scores specified by the user:
-    acc_results = acc_results.sample(n_scores, random_state=random_state)
+    sampled_results = eligible_results.sample(n_scores, random_state=random_state)
 
-    selected_pgs = list(acc_results["Model"].values)
+    selected_pgs = list(sampled_results["Model"].values)
 
     if keep_scores is not None:
         if isinstance(keep_scores, str):
@@ -124,16 +149,27 @@ def sample_noninformative_prs(
             if pgs not in selected_pgs:
                 selected_pgs.append(pgs)
 
-    return selected_pgs
+    if not return_details:
+        return selected_pgs
+
+    sampled_set = set(sampled_results["Model"].values)
+    selected_details = (
+        acc_results.set_index("Model")
+        .reindex(selected_pgs)
+        .reset_index()
+        .rename(columns={"index": "Model"})
+    )
+    selected_details["SelectedByThreshold"] = selected_details["Model"].isin(
+        sampled_set
+    )
+    selected_details["R2_Threshold"] = float(r2_threshold)
+    selected_details["R2_Metric"] = r2_metric_name
+
+    return selected_pgs, selected_details
 
 
 def _as_bool_mask(x):
-    return (
-        x.astype(str)
-        .str.strip()
-        .str.lower()
-        .isin({"1", "true", "t", "yes", "y"})
-    )
+    return x.astype(str).str.strip().str.lower().isin({"1", "true", "t", "yes", "y"})
 
 
 def create_control_prs_dataset(
@@ -346,6 +382,18 @@ if __name__ == "__main__":
         help="If set, also creates/saves PRSDataset full/train/test for each control analysis.",
     )
     parser.add_argument(
+        "--target-biobanks",
+        dest="target_biobanks",
+        nargs="+",
+        type=str,
+        default=None,
+        choices={"ukbb", "cartagene"},
+        help=(
+            "Biobank list for control harmonized dataset creation when "
+            "--create-harmonized-datasets is enabled. Defaults to --biobank."
+        ),
+    )
+    parser.add_argument(
         "--pcs-source",
         dest="pcs_source",
         type=str,
@@ -371,6 +419,14 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     np.random.seed(args.seed)
+
+    if args.create_harmonized_datasets:
+        if args.target_biobanks is None:
+            target_biobanks = [args.biobank]
+        else:
+            target_biobanks = sorted(set(args.target_biobanks))
+    else:
+        target_biobanks = []
 
     # ---------------------------------------------------------------
     # Obtain the mapping for the model names:
@@ -418,7 +474,9 @@ if __name__ == "__main__":
     for i, analysis_id in enumerate(requested_analysis_ids):
         adf = analysis_df.loc[analysis_df["AnalysisID"] == analysis_id].copy()
         if adf.empty:
-            raise ValueError(f"AnalysisID '{analysis_id}' not found in {args.analysis_file}")
+            raise ValueError(
+                f"AnalysisID '{analysis_id}' not found in {args.analysis_file}"
+            )
 
         phenotype = str(adf["Phenotype_short"].iloc[0])
 
@@ -433,7 +491,7 @@ if __name__ == "__main__":
 
         disease_pgs = str(disease_row["PGS"])
 
-        selected_pgs = sample_noninformative_prs(
+        selected_pgs, selected_details = sample_noninformative_prs(
             phenotype=phenotype,
             biobank=args.biobank,
             n_scores=args.n_scores,
@@ -441,20 +499,35 @@ if __name__ == "__main__":
             sampling_subset=sampling_subset,
             r2_threshold=args.r2_threshold,
             random_state=args.seed + i,
+            return_details=True,
+        )
+        sampled_r2_map = dict(
+            zip(selected_details["Model"].values, selected_details["R2"].values)
+        )
+        sampled_metric_map = dict(
+            zip(selected_details["Model"].values, selected_details["R2_Metric"].values)
+        )
+        sampled_flag_map = dict(
+            zip(
+                selected_details["Model"].values,
+                selected_details["SelectedByThreshold"].values,
+            )
         )
 
         template_row = adf.iloc[0].to_dict()
         control_analysis_id = (
-            analysis_id if args.control_suffix == "" else f"{analysis_id}{args.control_suffix}"
+            analysis_id
+            if args.control_suffix == ""
+            else f"{analysis_id}{args.control_suffix}"
         )
 
-        if args.create_harmonized_datasets:
+        for biobank in target_biobanks:
             print(
-                f"> Creating control PRSDataset for {control_analysis_id} ({args.biobank}) "
+                f"> Creating control PRSDataset for {control_analysis_id} ({biobank}) "
                 f"with {len(selected_pgs)} scores."
             )
             prs_dataset = create_control_prs_dataset(
-                biobank=args.biobank,
+                biobank=biobank,
                 analysis_id=control_analysis_id,
                 phenotype=phenotype,
                 selected_pgs=selected_pgs,
@@ -462,13 +535,15 @@ if __name__ == "__main__":
                 ancestry_source=args.ancestry_source,
             )
 
-            out_dir = f"data/harmonized_data/{control_analysis_id}/{args.biobank}/"
+            out_dir = f"data/harmonized_data/{control_analysis_id}/{biobank}/"
             makedir(out_dir)
 
             prs_dataset.save(osp.join(out_dir, "full_data.pkl"))
 
             np.random.seed(args.seed + i)
-            train_data, test_data = prs_dataset.train_test_split(test_size=args.prop_test)
+            train_data, test_data = prs_dataset.train_test_split(
+                test_size=args.prop_test
+            )
             train_data.save(osp.join(out_dir, "train_data.pkl"))
             test_data.save(osp.join(out_dir, "test_data.pkl"))
 
@@ -477,17 +552,28 @@ if __name__ == "__main__":
             row["AnalysisID"] = control_analysis_id
             row["PGS"] = pgs
             row[args.disease_flag_col] = bool(pgs == disease_pgs)
+            row["Testing_R2"] = sampled_r2_map.get(pgs, np.nan)
+            row["Testing_R2_Metric"] = sampled_metric_map.get(pgs, "R2")
+            row["Sampled_As_Noninformative"] = bool(sampled_flag_map.get(pgs, False))
+            row["Testing_Biobank"] = args.biobank
+            row["Testing_R2_Threshold"] = float(args.r2_threshold)
             if "PGSCatalog_ID" in row:
                 row["PGSCatalog_ID"] = pgs
             if "PGS_Name" in row:
                 row["PGS_Name"] = pgs_name_map.get(pgs, pgs)
             if "Notes" in row:
                 if pgs == disease_pgs:
-                    row["Notes"] = "Disease-specific score retained in control analysis"
+                    row["Notes"] = (
+                        "Disease-specific score retained in control analysis "
+                        f"(Testing_R2={row['Testing_R2']:.6g}, "
+                        f"metric={row['Testing_R2_Metric']})"
+                    )
                 else:
                     row["Notes"] = (
                         f"Sampled non-informative control score "
-                        f"(biobank={args.biobank}, incremental R2<{args.r2_threshold})"
+                        f"(biobank={args.biobank}, "
+                        f"{row['Testing_R2_Metric']}<{args.r2_threshold}, "
+                        f"Testing_R2={row['Testing_R2']:.6g})"
                     )
 
             control_rows.append(row)
@@ -499,7 +585,8 @@ if __name__ == "__main__":
 
     # Keep the same column order as the input analysis table.
     ordered_cols = [c for c in analysis_df.columns if c in control_df.columns]
-    control_df = control_df[ordered_cols]
+    extra_cols = [c for c in control_df.columns if c not in ordered_cols]
+    control_df = control_df[ordered_cols + extra_cols]
 
     output_dir = osp.dirname(args.output_file)
     if output_dir:

@@ -1,6 +1,29 @@
 import numpy as np
 import pandas as pd
-from viprs.eval.eval_utils import fit_linear_model
+from viprs.eval import eval_incremental_metrics as INCREMENTAL_METRICS
+from viprs.eval import eval_metric_names as EVAL_METRICS
+
+CONT_EVAL_METRICS = {
+    m: f
+    for m, f in EVAL_METRICS.items()
+    if m
+    in (
+        "Pearson_R",
+        "Spearman_R",
+        "MSE",
+        "R2",
+        "R2_residualized_target",
+        "Incremental_R2",
+        "Partial_Correlation",
+    )
+}
+
+
+BINARY_EVAL_METRICS = {
+    m: f
+    for m, f in EVAL_METRICS.items()
+    if m not in list(CONT_EVAL_METRICS.keys()) + ["F1_Score"]
+}
 
 
 def rowwise_cosine_similarity(X, Y, eps=1e-12):
@@ -32,14 +55,15 @@ def rowwise_cosine_similarity(X, Y, eps=1e-12):
     return np.sum(X * Y, axis=1) / denom
 
 
-def generate_predictions(prs_dataset, models, use_only_prs=True):
+def generate_predictions(prs_dataset, models):
     preds = {}
 
     for m_name, m in models.items():
-        if use_only_prs and hasattr(m, "predict_prs"):
-            preds[m_name] = m.predict_prs(prs_dataset).flatten()
-        else:
-            preds[m_name] = m.predict(prs_dataset).flatten()
+        try:
+            preds[m_name + "-PRS-only"] = m.predict_prs(prs_dataset).flatten()
+        except Exception as e:
+            pass
+        preds[m_name] = m.predict(prs_dataset).flatten()
 
     return pd.DataFrame(preds)
 
@@ -126,7 +150,9 @@ def subsample_to_prevalence(
     n_cases = int(case_idx.shape[0])
     n_controls = int(control_idx.shape[0])
     if n_cases + n_controls == 0:
-        raise ValueError("No eligible samples after applying mask and missingness filter.")
+        raise ValueError(
+            "No eligible samples after applying mask and missingness filter."
+        )
 
     if desired_prevalence in (0.0, 1.0):
         n_case_keep = n_cases if desired_prevalence == 1.0 else 0
@@ -177,11 +203,7 @@ def subsample_to_prevalence(
         return sampled_mask
 
     n_keep = int(sampled_mask.sum())
-    achieved_prev = (
-        float(n_case_keep / n_keep)
-        if n_keep > 0
-        else np.nan
-    )
+    achieved_prev = float(n_case_keep / n_keep) if n_keep > 0 else np.nan
     info = {
         "desired_prevalence": desired_prevalence,
         "achieved_prevalence": achieved_prev,
@@ -454,31 +476,21 @@ def average_precision_at_top_percentile(y_true, y_pred, percentile=0.05):
     return ap
 
 
-def incremental_r2_matched_null(true_val, full_pred, null_pred, covariates):
+def incremental_r2_from_predictions(
+    true_val, full_pred, null_pred, metric="Incremental_R2"
+):
+    """
+    This function assumes that the null and full models have already incorporated all
+    the shared components (e.g. covariates) into their predictions.
+    """
+
+    assert metric in INCREMENTAL_METRICS
+
     true_val = np.asarray(true_val).reshape(-1)
     full_pred = np.asarray(full_pred).reshape(-1)
     null_pred = np.asarray(null_pred).reshape(-1)
 
-    # genetic increment (what changes when you "turn on PRS")
-    gen_pred = full_pred - null_pred
+    r2_null = EVAL_METRICS[metric](true_val, null_pred)
+    r2_full = EVAL_METRICS[metric](true_val, full_pred)
 
-    if covariates is None:
-        covariates = pd.DataFrame({"const": np.ones(len(true_val))})
-        add_intercept = False
-    else:
-        add_intercept = True
-
-    # Null (matched) evaluation regression: y ~ C + null_pred
-    null_res = fit_linear_model(
-        true_val, covariates.assign(null_pred=null_pred), add_intercept=add_intercept
-    )
-
-    # Full (matched) evaluation regression: y ~ C + null_pred + gen_pred
-    full_res = fit_linear_model(
-        true_val,
-        covariates.assign(null_pred=null_pred, gen_pred=gen_pred),
-        # covariates.assign(null_pred=null_pred, full_pred=full_pred),
-        add_intercept=add_intercept,
-    )
-
-    return full_res.rsquared - null_res.rsquared
+    return r2_full - r2_null

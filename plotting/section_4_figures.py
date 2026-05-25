@@ -23,11 +23,11 @@ from moe import GroupMeanWeightedPRS, MoEPRS
 from plot_pgs_admixture import plot_admixture_graphs
 from plot_stratified_prediction_accuracy import extract_stratified_evaluation_metrics
 from plot_utils import (
-    ANALYSIS_TO_TABLE_MAP,
     ANALYSIS_TO_PHENOTYPE_MAP,
-    ANALYSIS_TO_SHORT_PHENOTYPE_MAP,
+    ANALYSIS_TO_TABLE_MAP,
     BIOBANK_NAME_MAP,
     BIOBANK_NAME_MAP_SHORT,
+    METRIC_NAME_MAP,
     MODEL_NAME_MAP,
     assign_models_consistent_colors,
 )
@@ -36,45 +36,47 @@ from section_2_figures import extract_accuracy_data_all_phenotypes
 
 # -----------------------------------------------------------------------------------------
 
-DEFAULT_MT_TABLE = osp.join(parent_dir, "tables", "multitrait_prs_table.csv")
-DEFAULT_DISEASE_FLAG_COL = "Is_Disease_Matched"
+
+DISEASE_MATCH_FLAG_COL = "Is_Disease_Matched"
 
 
 def _as_bool_mask(x):
-    return (
-        x.astype(str)
-        .str.strip()
-        .str.lower()
-        .isin({"1", "true", "t", "yes", "y"})
-    )
+    return x.astype(str).str.strip().str.lower().isin({"1", "true", "t", "yes", "y"})
 
 
 @lru_cache(maxsize=1)
-def _load_mt_disease_prs_map(
-    table_path=DEFAULT_MT_TABLE, disease_flag_col=DEFAULT_DISEASE_FLAG_COL
-):
-    if not osp.exists(table_path):
-        return {}
+def _load_mt_disease_prs_map():
+    from model_utils import get_analysis_tables
 
-    df = pd.read_csv(table_path)
-    required_cols = {"AnalysisID", "PGS", disease_flag_col}
-    if not required_cols.issubset(df.columns):
-        return {}
+    mapping = {}
+    for _, df in get_analysis_tables().items():
+        required = {"AnalysisID", "PGS", DISEASE_MATCH_FLAG_COL}
+        if not required.issubset(df.columns):
+            continue
 
-    disease_df = df.loc[_as_bool_mask(df[disease_flag_col]), ["AnalysisID", "PGS"]].copy()
-    if disease_df.empty:
-        return {}
+        matched = df.loc[df[DISEASE_MATCH_FLAG_COL].astype(bool)].copy()
+        if matched.empty:
+            continue
 
-    # Keep first if multiple are flagged for a given analysis.
-    disease_df = disease_df.drop_duplicates("AnalysisID", keep="first")
-    return dict(zip(disease_df["AnalysisID"], disease_df["PGS"]))
+        name_col = "PGS_Name" if "PGS_Name" in matched.columns else "PGS"
+        matched = matched[["AnalysisID", name_col]].drop_duplicates("AnalysisID")
+
+        mapping.update(
+            dict(zip(matched["AnalysisID"].astype(str), matched[name_col].astype(str)))
+        )
+
+    return mapping
 
 
 def _get_disease_prs_name(analysis_id):
-    mt_map = _load_mt_disease_prs_map()
-    if analysis_id in mt_map:
-        return str(mt_map[analysis_id])
-    return ANALYSIS_TO_SHORT_PHENOTYPE_MAP[analysis_id]
+    analysis_id = str(analysis_id)
+    mapping = _load_mt_disease_prs_map()
+
+    if analysis_id in mapping:
+        return mapping[analysis_id]
+    if analysis_id.endswith("_CTRL"):
+        return mapping.get(analysis_id[:-5], analysis_id)
+    return analysis_id
 
 
 def _parse_threshold_rule(rule_text):
@@ -270,7 +272,7 @@ def extract_disease_mixing_quartile_metrics(
     moe_model_name,
     analysis_id,
     test_biobank,
-    metric="Liability_R2",
+    metric="Nagelkerke_R2",
     disease_prs_name=None,
     dataset="test_data",
     min_group_size=30,
@@ -477,6 +479,7 @@ def plot_binary_mixing_group_panels(
     test_biobank="ukbb",
     dataset="test_data",
     metric="ROC_AUC",
+    incremental_metric="Nagelkerke_R2",
     disease_prs_name=None,
     output_file=None,
     partition_method="threshold",
@@ -503,7 +506,7 @@ def plot_binary_mixing_group_panels(
         )
 
     requested_metrics = (
-        [metric] if metric == "Liability_R2" else [metric, "Liability_R2"]
+        [metric] if metric == incremental_metric else [metric, incremental_metric]
     )
 
     df = extract_disease_mixing_quartile_metrics(
@@ -519,18 +522,6 @@ def plot_binary_mixing_group_panels(
         threshold_rules=threshold_rules,
         n_quantiles=n_quantiles,
     )
-
-    accuracy_metrics = (
-        [metric] if metric == "Liability_R2" else [metric, "Liability_R2"]
-    )
-
-    def metric_panel_title(metric_name):
-        title_map = {
-            "Liability_R2": "Incremental $R^2$",
-            "Incremental_R2": "Incremental $R^2$",
-            "Nagelkerke_R2": "Nagelkerke $R^2$",
-        }
-        return title_map.get(metric_name, metric_name.replace("_", " "))
 
     resolved_disease_prs = df["Disease_PRS"].iloc[0]
 
@@ -592,7 +583,7 @@ def plot_binary_mixing_group_panels(
         ("Case_Proportion", "Case prevalence"),
     ]
 
-    n_panels = 3 + len(accuracy_metrics)
+    n_panels = 3 + len(requested_metrics)
     fig, axes = plt.subplots(
         1,
         n_panels,
@@ -762,7 +753,7 @@ def plot_binary_mixing_group_panels(
                         capsize=0,
                     )
 
-        acc_ax.set_title(metric_panel_title(metric_name))
+        acc_ax.set_title(METRIC_NAME_MAP[metric_name])
         acc_ax.set_ylabel("")
         acc_ax.set_xlabel("")
         if show_legend:
@@ -774,7 +765,7 @@ def plot_binary_mixing_group_panels(
         if metric_name == "ROC_AUC":
             acc_ax.set_xlim(0.5, 1.0)
 
-    for i, metric_name in enumerate(accuracy_metrics):
+    for i, metric_name in enumerate(requested_metrics):
         plot_accuracy_panel(
             axes[3 + i],
             df,
@@ -801,6 +792,7 @@ def plot_prevalence_subsampled_mixing_accuracy_panels(
     analysis_id,
     test_biobank="ukbb",
     dataset="test_data",
+    incremental_metric="Nagelkerke_R2",
     disease_prs_name=None,
     output_file=None,
     partition_method="threshold",
@@ -874,7 +866,7 @@ def plot_prevalence_subsampled_mixing_accuracy_panels(
         ),
     }
     preds = generate_predictions(dat, trained_models)
-    metrics = ["ROC_AUC", "Liability_R2"]
+    metrics = ["ROC_AUC", incremental_metric]
 
     phenotype_vals = np.asarray(dat.get_phenotype()).reshape(-1)
     overall_prevalence = float(np.nanmean(phenotype_vals))
@@ -1076,7 +1068,7 @@ def plot_prevalence_subsampled_mixing_accuracy_panels(
         )
         draw_accuracy_panel(
             axes[1, col_idx],
-            "Liability_R2",
+            incremental_metric,
             scenario_label,
             show_legend=False,
             show_y=(col_idx == 0),
@@ -1104,7 +1096,7 @@ def plot_disease_prs_age_sex_accuracy(
     analysis_id,
     test_biobank="ukbb",
     dataset="test_data",
-    metric="Liability_R2",
+    metric="Nagelkerke_R2",
     keep_ancestry=("EUR",),
     output_file=None,
 ):
@@ -1154,13 +1146,6 @@ def plot_disease_prs_age_sex_accuracy(
     )
     plot_df = plot_df.sort_values("EvalGroup")
 
-    metric_label_map = {
-        "Liability_R2": "Liability $R^2$",
-        "Incremental_R2": "Incremental $R^2$",
-        "ROC_AUC": "ROC AUC",
-        "PR_AUC": "PR AUC",
-    }
-
     prs_color = assign_models_consistent_colors([disease_prs]).get(
         disease_prs, "#4C78A8"
     )
@@ -1205,7 +1190,7 @@ def plot_disease_prs_age_sex_accuracy(
         va="top",
         fontsize=9,
     )
-    ax.set_ylabel(metric_label_map.get(metric, metric.replace("_", " ")))
+    ax.set_ylabel(METRIC_NAME_MAP.get(metric, metric.replace("_", " ")))
     ax.set_axisbelow(True)
     ax.grid(True, axis="y")
     plt.xticks(rotation=20, ha="right")
@@ -1221,7 +1206,7 @@ def plot_minority_ancestry_accuracy_panels(
     biobanks=("ukbb", "cartagene"),
     dataset_by_biobank=None,
     disease_prs_name_map=None,
-    metric="Liability_R2",
+    metric="Nagelkerke_R2",
     min_group_size=30,
     phenotype_order=None,
     output_file=None,
@@ -1275,7 +1260,8 @@ def plot_minority_ancestry_accuracy_panels(
                 dat = PRSDataset.from_pickle(
                     f"data/harmonized_data/{analysis_id}/{biobank}/{dataset}.pkl"
                 )
-            except Exception:
+            except Exception as e:
+                print(e)
                 continue
 
             dat.filter_samples(dat.data["Ancestry"] != "EUR")
@@ -1286,13 +1272,15 @@ def plot_minority_ancestry_accuracy_panels(
                 ukb_moe = MoEPRS.from_saved_model(
                     f"data/trained_models/{analysis_id}/ukbb/train_data/{moe_model_name}.pkl"
                 )
-            except Exception:
+            except Exception as e:
+                print(e)
                 continue
             try:
                 ukb_multiprs = MultiPRS.from_saved_model(
                     f"data/trained_models/{analysis_id}/ukbb/train_data/MultiPRS.pkl"
                 )
-            except Exception:
+            except Exception as e:
+                print(e)
                 continue
 
             dat.data["MinorityGroup"] = "non-EUR"
@@ -1305,6 +1293,8 @@ def plot_minority_ancestry_accuracy_panels(
                 for prs_id in ukb_moe.expert_cols
             ]
             if disease_prs_name not in mapped_expert_names:
+                print(disease_prs_name)
+                print(mapped_expert_names)
                 continue
 
             disease_expert_idx = mapped_expert_names.index(disease_prs_name)
@@ -1332,16 +1322,12 @@ def plot_minority_ancestry_accuracy_panels(
                     evaluate_base_models=True,
                     min_group_size=min_group_size,
                 )
-            except Exception:
+            except Exception as e:
+                print(e)
                 continue
 
             if metric not in edf.columns:
-                if metric == "Incremental_R2" and "Liability_R2" in edf.columns:
-                    edf["Incremental_R2"] = edf["Liability_R2"]
-                    if "Liability_R2_err" in edf.columns:
-                        edf["Incremental_R2_err"] = edf["Liability_R2_err"]
-                else:
-                    continue
+                continue
 
             edf["PGS"] = edf["PGS"].map(lambda x: MODEL_NAME_MAP[analysis_id].get(x, x))
 
@@ -1411,6 +1397,17 @@ if __name__ == "__main__":
         help="The name of the MoE model to plot as reference.",
     )
 
+    parser.add_argument(
+        "--binary-metric",
+        dest="binary_metric",
+        type=str,
+        choices=
+        {"Liability_R2", "Nagelkerke_R2", "CoxSnell_R2","McFadden_R2",
+            "Liability_Probit_R2", "Liability_Logit_R2"},
+        default="Nagelkerke_R2",
+        help="The metric to plot for binary phenotypes.",
+    )
+
     args = parser.parse_args()
 
     sns.set_context("paper", font_scale=1.5)
@@ -1437,42 +1434,50 @@ if __name__ == "__main__":
         "Type 1 Diabetes",
     ]
 
-    metrics_dfs = []
-    for biobank in ("ukbb", "cartagene"):
-        bb_short = BIOBANK_NAME_MAP_SHORT[biobank]
-        metrics_df = extract_accuracy_data_all_phenotypes(
-            args.moe_model,
-            biobank,
-            analysis_table_id="multitrait_prs_table",
-            dataset=["test_data", "full_data"][biobank == "cartagene"],
-            exclude_all=False,
+    analysis_tables = {
+        "standard": "multitrait_prs_table",
+        "control": "control_multitrait_prs_table",
+    }
+
+    for tab_name, analysis_table in analysis_tables.items():
+        metrics_dfs = []
+        for biobank in ("ukbb", "cartagene"):
+            bb_short = BIOBANK_NAME_MAP_SHORT[biobank]
+            metrics_df = extract_accuracy_data_all_phenotypes(
+                args.moe_model,
+                biobank,
+                binary_metric=args.binary_metric,
+                analysis_table_id=analysis_table,
+                dataset=["test_data", "full_data"][biobank == "cartagene"],
+                exclude_all=False,
+            )
+
+            metrics_df = metrics_df.loc[metrics_df["Evaluation Group"] == "All"]
+            metrics_df["Biobank"] = BIOBANK_NAME_MAP[biobank]
+            metrics_dfs.append(metrics_df)
+
+        metrics_dfs = pd.concat(metrics_dfs).reset_index()
+        uniq_phenotypes = metrics_dfs["Phenotype"].unique()
+
+        g = plot_combined_accuracy_metrics(
+            metrics_dfs,
+            output_f=f"figures/section_4/accuracy_metrics_{tab_name}.eps",
+            x="Phenotype",
+            palette=palette,
+            order=[p for p in phenotype_order if p in uniq_phenotypes],
+            hue_order=hue_order,
+            column=None,
+            row="Biobank",
+            height=3,
+            aspect=4,
+            sharey=False,
+            test_models=[
+                ("MoEPRS (UKB)", "MultiPRS (UKB)"),
+                ("MoEPRS (UKB)", "Best Single Source PRS"),
+            ],
+            significance_symbols=["*", "+"],
+            x_tick_rotation=90,
         )
-
-        metrics_df = metrics_df.loc[metrics_df["Evaluation Group"] == "All"]
-        metrics_df["Biobank"] = BIOBANK_NAME_MAP[biobank]
-        metrics_dfs.append(metrics_df)
-
-    metrics_dfs = pd.concat(metrics_dfs).reset_index()
-
-    g = plot_combined_accuracy_metrics(
-        metrics_dfs,
-        output_f="figures/section_4/accuracy_metrics.eps",
-        x="Phenotype",
-        palette=palette,
-        order=phenotype_order,
-        hue_order=hue_order,
-        column=None,
-        row="Biobank",
-        height=3,
-        aspect=4,
-        sharey=False,
-        test_models=[
-            ("MoEPRS (UKB)", "MultiPRS (UKB)"),
-            ("MoEPRS (UKB)", "Best Single Source PRS"),
-        ],
-        significance_symbols=["*", "+"],
-        x_tick_rotation=90,
-    )
 
     plot_minority_ancestry_accuracy_panels(
         moe_model_name=args.moe_model,
@@ -1484,19 +1489,27 @@ if __name__ == "__main__":
         ],
         biobanks=("ukbb", "cartagene"),
         dataset_by_biobank={"ukbb": "test_data", "cartagene": "full_data"},
-        metric="Liability_R2",
+        metric=args.binary_metric,
         phenotype_order=phenotype_order,
         output_file="figures/section_4/minority_ancestry_accuracy_metrics.eps",
     )
 
     # ---------------- Plot explanatory graphs ----------------
 
-    for analysis_id in ["CAD_MT", "HTN_MT", "T2D_MT", "AF_MT", "ASTHMA_MT"]:
+    for analysis_id in [
+        "CAD_MT",
+        "CAD_MT_CTRL",
+        "HTN_MT",
+        "T2D_MT",
+        "AF_MT",
+        "ASTHMA_MT",
+    ]:
         plot_binary_mixing_group_panels(
             moe_model_name=args.moe_model,
             analysis_id=analysis_id,
             test_biobank="ukbb",
             dataset="test_data",
+            incremental_metric=args.binary_metric,
             partition_method="quartile",
             n_quantiles=4,
             output_file=f"figures/section_4/group_summary_{analysis_id}_ukbb.png",
@@ -1506,6 +1519,7 @@ if __name__ == "__main__":
             moe_model_name=args.moe_model,
             analysis_id=analysis_id,
             test_biobank="ukbb",
+            incremental_metric=args.binary_metric,
             dataset="test_data",
             partition_method="quartile",
             n_quantiles=4,
@@ -1569,7 +1583,7 @@ if __name__ == "__main__":
                 analysis_id=analysis_id,
                 test_biobank=biobank,
                 dataset="test_data",
-                metric="Liability_R2",
+                metric=args.binary_metric,
                 keep_ancestry=("EUR",),
                 output_file=f"figures/section_4/disease_prs_age_sex_accuracy_{analysis_id}_{biobank}.png",
             )
@@ -1578,8 +1592,9 @@ if __name__ == "__main__":
 
     for analysis_id in ANALYSIS_TO_PHENOTYPE_MAP.keys():
         if (
-            ANALYSIS_TO_PHENOTYPE_MAP.get(analysis_id, analysis_id) not in phenotype_order
-            or ANALYSIS_TO_TABLE_MAP.get(analysis_id) != "multitrait_prs_table"
+            ANALYSIS_TO_PHENOTYPE_MAP.get(analysis_id, analysis_id)
+            not in phenotype_order
+            or ANALYSIS_TO_TABLE_MAP.get(analysis_id) not in analysis_tables.values()
         ):
             continue
 
