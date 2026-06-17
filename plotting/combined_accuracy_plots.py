@@ -236,6 +236,8 @@ if __name__ == "__main__":
             strat_var = ["Ancestry", "Coarse Ancestry"]
 
         df = read_transform_eval_metrics(f)
+        if "train_biobank" in df.columns:
+            df["train_biobank"] = df["train_biobank"].astype(str).str.lower()
 
         keep_train_biobanks = [args.biobank]
         if not args.restrict_to_same_biobank:
@@ -266,6 +268,7 @@ if __name__ == "__main__":
                 metric_kind=args.metric_kind,
                 category=eval_cat,
                 aggregate_single_prs=args.aggregate_single_prs,
+                add_training_biobank_to_model_name=not args.restrict_to_same_biobank,
             )
 
             if args.binary_metric in eval_df.columns:

@@ -170,11 +170,8 @@ def train_moe_model_numpy(dataset):
     # -----------------------------------------
     # Gating model input:
 
-    use_prs_in_gate = args.add_prs_to_gate
-
     gate_input = list(dataset.covariates_cols)
-    if use_prs_in_gate:
-        gate_input += list(dataset.prs_cols)
+    prs_gate_input = gate_input + list(dataset.prs_cols)
 
     # -----------------------------------------
     # Fit the standard MoEPRS model:
@@ -194,6 +191,25 @@ def train_moe_model_numpy(dataset):
     runtimes["MoE"] = timer.minutes
 
     print("------------------------------------")
+
+    if args.add_prs_to_gate:
+        print("------------------------------------")
+        print("> Training standard MoE model with PRS in the gate...")
+
+        moe_prs_gate = MoEPRS(
+            prs_dataset=dataset,
+            expert_cols=dataset.prs_cols,
+            gate_input_cols=prs_gate_input,
+            global_covariates_cols=dataset.covariates_cols,
+        )
+
+        with Timer() as timer:
+            moe_prs_gate.fit()
+
+        moe_models["MoE-prs-gating"] = moe_prs_gate
+        runtimes["MoE-prs-gating"] = timer.minutes
+
+        print("------------------------------------")
 
     # -----------------------------------------
     # Fit MoEPRS model covariate-free gating (e.g. MultiPRS)
@@ -241,6 +257,30 @@ def train_moe_model_numpy(dataset):
 
     print("------------------------------------")
 
+    if args.add_prs_to_gate:
+        print("------------------------------------")
+        print("> Training MoE model with PRS in the gate and grid search...")
+
+        partial_moe_prs_gate = partial(
+            MoEPRS,
+            expert_cols=dataset.prs_cols,
+            gate_input_cols=prs_gate_input,
+            global_covariates_cols=dataset.covariates_cols,
+        )
+
+        with Timer() as timer:
+            moe_models["MoE-GS-prs-gating"] = custom_cv_grid_search(
+                dataset,
+                partial_moe_prs_gate,
+                {"gate_penalty": get_gate_penalty_ladder()},
+                n_jobs=4,
+                validation_fit_params={"verbose": False, "n_iter": 100},
+            )
+
+        runtimes["MoE-GS-prs-gating"] = timer.minutes
+
+        print("------------------------------------")
+
     # -----------------------------------------
     # Run MoEPRS with fixed residuals:
 
@@ -272,10 +312,8 @@ def train_moe_models_torch(dataset, **kwargs):
     )
     dataset.set_backend("torch")
 
-    use_prs_in_gate = args.add_prs_to_gate
     gate_input = list(dataset.covariates_cols)
-    if use_prs_in_gate:
-        gate_input += list(dataset.prs_cols)
+    prs_gate_input = gate_input + list(dataset.prs_cols)
 
     moe_models = dict()
     runtimes = dict()
@@ -293,48 +331,54 @@ def train_moe_models_torch(dataset, **kwargs):
     fit_kwargs = {k: kwargs[k] for k in fit_keys if k in kwargs}
     model_kwargs = {k: v for k, v in kwargs.items() if k not in fit_keys}
 
-    model = TorchMoEPRS(
-        prs_dataset=dataset,
-        expert_cols=dataset.prs_cols,
-        gate_input_cols=gate_input,
-        global_covariates_cols=dataset.covariates_cols,
-        **model_kwargs,
-    )
-
-    with Timer() as timer:
-        model.fit(**fit_kwargs)
-
-    moe_models["TorchMoEPRS"] = model
-    runtimes["TorchMoEPRS"] = timer.minutes
-
-    if dataset.phenotype_likelihood == "binomial":
-        model_ens = TorchMoEPRS(
+    def fit_torch_models(gate_cols, suffix=""):
+        model = TorchMoEPRS(
             prs_dataset=dataset,
             expert_cols=dataset.prs_cols,
-            gate_input_cols=gate_input,
+            gate_input_cols=gate_cols,
             global_covariates_cols=dataset.covariates_cols,
-            loss="ensemble_loss",
-            binomial_mixing_level="logit",
             **model_kwargs,
         )
 
         with Timer() as timer:
-            model_ens.fit(**fit_kwargs)
-    else:
-        model_ens = TorchMoEPRS(
-            prs_dataset=dataset,
-            expert_cols=dataset.prs_cols,
-            gate_input_cols=gate_input,
-            global_covariates_cols=dataset.covariates_cols,
-            loss="ensemble_loss",
-            **model_kwargs,
-        )
+            model.fit(**fit_kwargs)
 
-        with Timer() as timer:
-            model_ens.fit(**fit_kwargs)
+        moe_models[f"TorchMoEPRS{suffix}"] = model
+        runtimes[f"TorchMoEPRS{suffix}"] = timer.minutes
 
-    moe_models["TorchMoEPRS-ensemble"] = model_ens
-    runtimes["TorchMoEPRS-ensemble"] = timer.minutes
+        if dataset.phenotype_likelihood == "binomial":
+            model_ens = TorchMoEPRS(
+                prs_dataset=dataset,
+                expert_cols=dataset.prs_cols,
+                gate_input_cols=gate_cols,
+                global_covariates_cols=dataset.covariates_cols,
+                loss="ensemble_loss",
+                binomial_mixing_level="logit",
+                **model_kwargs,
+            )
+
+            with Timer() as timer:
+                model_ens.fit(**fit_kwargs)
+        else:
+            model_ens = TorchMoEPRS(
+                prs_dataset=dataset,
+                expert_cols=dataset.prs_cols,
+                gate_input_cols=gate_cols,
+                global_covariates_cols=dataset.covariates_cols,
+                loss="ensemble_loss",
+                **model_kwargs,
+            )
+
+            with Timer() as timer:
+                model_ens.fit(**fit_kwargs)
+
+        moe_models[f"TorchMoEPRS-ensemble{suffix}"] = model_ens
+        runtimes[f"TorchMoEPRS-ensemble{suffix}"] = timer.minutes
+
+    fit_torch_models(gate_input)
+
+    if args.add_prs_to_gate:
+        fit_torch_models(prs_gate_input, suffix="-prs-gating")
 
     return moe_models, runtimes
 

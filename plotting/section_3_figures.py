@@ -10,6 +10,7 @@ import pandas as pd
 import seaborn as sns
 from magenpy.utils.system_utils import makedir
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+from numpy.ma.core import add
 from scipy.spatial.distance import jensenshannon
 
 parent_dir = osp.dirname(osp.dirname(osp.abspath(__file__)))
@@ -23,16 +24,16 @@ from eval_utils import rowwise_cosine_similarity
 from model_utils import subset_standard_scaler
 from moe import MoEPRS
 from plot_pgs_admixture import plot_admixture_graphs
-from plot_stratified_prediction_accuracy import extract_stratified_evaluation_metrics
+from plot_stratified_prediction_accuracy import estimate_stratified_evaluation_metrics
 from plot_utils import (
-    ANALYSIS_TO_TABLE_MAP,
     ANALYSIS_TO_PHENOTYPE_MAP,
+    ANALYSIS_TO_TABLE_MAP,
     BIOBANK_NAME_MAP_SHORT,
     MODEL_NAME_MAP,
     assign_models_consistent_colors,
+    extract_accuracy_data_all_phenotypes,
 )
 from PRSDataset import PRSDataset
-from section_2_figures import extract_accuracy_data_all_phenotypes
 
 
 def plot_age_and_sex_stratified_mixing_weights(
@@ -83,7 +84,7 @@ def plot_age_and_sex_stratified_mixing_weights(
         f"European ancestry ({BIOBANK_NAME_MAP_SHORT[biobank]})"
     )
     plt.tight_layout()
-    plt.savefig(f"figures/section_3_new/weights_{analysis_id}_{biobank}.png", dpi=300)
+    plt.savefig(f"figures/section_3/weights_{analysis_id}_{biobank}.png", dpi=300)
     plt.close()
 
 
@@ -94,7 +95,7 @@ def generate_stratified_metrics_figures(
     category=("SexG", "AgeGroup3"),
 ):
     # -----------------------------------------------------------------
-    metrics_df = extract_stratified_evaluation_metrics(
+    metrics_df = estimate_stratified_evaluation_metrics(
         analysis_id,
         biobank=biobank,
         keep_ancestry=keep_ancestry,
@@ -125,14 +126,12 @@ def generate_stratified_metrics_figures(
     plt.ylabel("Incremental $R^2$")
 
     plt.tight_layout()
-    plt.savefig(
-        f"figures/section_3_new/stratified_accuracy_{analysis_id}_{biobank}.eps"
-    )
+    plt.savefig(f"figures/section_3/stratified_accuracy_{analysis_id}_{biobank}.pdf")
     plt.close()
 
 
 def plot_medication_use_figures(analysis_id, biobank="ukbb"):
-    metrics_df = extract_stratified_evaluation_metrics(
+    metrics_df = estimate_stratified_evaluation_metrics(
         analysis_id,
         biobank=biobank,
         keep_ancestry=["EUR"],
@@ -223,7 +222,7 @@ def plot_medication_use_figures(analysis_id, biobank="ukbb"):
     plt.tight_layout()
 
     plt.savefig(
-        f"figures/section_3_new/medication_use_accuracy_{analysis_id}_{biobank}.eps"
+        f"figures/section_3/medication_use_accuracy_{analysis_id}_{biobank}.pdf"
     )
     plt.close()
 
@@ -238,9 +237,7 @@ def extract_mixing_weight_similarity_across_analyses(
     for analysis_id, table_id in ANALYSIS_TO_TABLE_MAP.items():
         if table_id != "multi_ancestry_prs_table":
             continue
-        model_f = (
-            f"data/trained_models/{analysis_id}/{biobank}/train_data/{moe_model_name}.pkl"
-        )
+        model_f = f"data/trained_models/{analysis_id}/{biobank}/train_data/{moe_model_name}.pkl"
         if osp.exists(model_f):
             unique_analysis.append(model_f)
 
@@ -470,7 +467,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     sns.set_context("paper", font_scale=1.25)
-    makedir("figures/section_3_new/")
+    makedir("figures/section_3/")
 
     # ----------------------------------------------------------
 
@@ -507,7 +504,7 @@ if __name__ == "__main__":
         for cohort in sim_data["Cohort"].unique():
             plot_triangular_similarity_matrix(
                 sim_data.loc[sim_data["Cohort"] == cohort].copy(),
-                f"figures/section_3_new/similarity_matrix_{biobank}_{args.sim_metric}_{cohort}.eps",
+                f"figures/section_3/similarity_matrix_{biobank}_{args.sim_metric}_{cohort}.pdf",
                 phenotype_order + ["Ancestry classifier"],
                 title=f"Mixing weight similarity for ancestry-stratified PRS\nacrosss {len(phenotype_order)} phenotypes in {BIOBANK_NAME_MAP_SHORT[biobank]}\n{cohort} samples",
                 metric_name=f"Mean {metric_names[args.sim_metric]}",
@@ -547,7 +544,7 @@ if __name__ == "__main__":
             )
             plot_triangular_similarity_matrix(
                 sim_data_adj.loc[sim_data_adj["Cohort"] == cohort].copy(),
-                f"figures/section_3_new/similarity_matrix_{biobank}_{args.sim_metric}_{cohort}_ADJ_phenotypes.eps",
+                f"figures/section_3/similarity_matrix_{biobank}_{args.sim_metric}_{cohort}_ADJ_phenotypes.pdf",
                 phenotype_order_adj_mod + ["Ancestry classifier"],
                 title=title,
                 metric_name=f"Mean {metric_names[args.sim_metric]}",
@@ -563,14 +560,13 @@ if __name__ == "__main__":
         for cohort in sim_data["Cohort"].unique():
             plot_triangular_similarity_matrix(
                 sim_data.loc[sim_data["Cohort"] == cohort].copy(),
-                f"figures/section_3_new/similarity_matrix_{biobank}_{args.sim_metric}_{cohort}_all_phenotypes.eps",
+                f"figures/section_3/similarity_matrix_{biobank}_{args.sim_metric}_{cohort}_all_phenotypes.pdf",
                 phenotype_order_all + ["Ancestry classifier"],
                 title=f"Mixing weight similarity for ancestry-stratified PRS\nacrosss {len(phenotype_order_all)} phenotypes in {BIOBANK_NAME_MAP_SHORT[biobank]}\n{cohort} samples",
                 metric_name=f"Mean {metric_names[args.sim_metric]}",
                 figsize=(figure_width // 2, figure_width // 2),
             )
 
-    """
     # ----------------------------------------------------------
     # Plot mixture graphs for the medication-adjusted phenotypes:
 
@@ -590,7 +586,7 @@ if __name__ == "__main__":
                 moe_model,
                 group_col="Ancestry",
                 title=f"PRS Mixture Graph for {ANALYSIS_TO_PHENOTYPE_MAP[analysis_id]} ({BIOBANK_NAME_MAP_SHORT[biobank]})",
-                output_file=f"figures/section_3_new/mixture_graphs_{analysis_id}_{biobank}.png",
+                output_file=f"figures/section_3/mixture_graphs_{analysis_id}_{biobank}.png",
                 subsample=True,
                 agg_mechanism="sort",
                 figsize=(figure_width, 3.1),
@@ -622,6 +618,7 @@ if __name__ == "__main__":
             args.moe_model,
             biobank,
             keep_analyses=["LDL_ADJ_MA", "TC_ADJ_MA", "DBP_ADJ_MA", "SBP_ADJ_MA"],
+            add_training_biobank_to_model_name=True,
         )
 
         metrics_df["Evaluation Group"] = (
@@ -634,7 +631,7 @@ if __name__ == "__main__":
 
         g = plot_combined_accuracy_metrics(
             metrics_df,
-            output_f=f"figures/section_3_new/accuracy_metrics_med_adj_{biobank}.eps",
+            output_f=f"figures/section_3/accuracy_metrics_med_adj_{biobank}.pdf",
             x="Phenotype",
             palette=palette,
             order=phenotype_order_adj,
@@ -674,4 +671,3 @@ if __name__ == "__main__":
                 adj_pheno,
                 biobank=biobank,
             )
-    """

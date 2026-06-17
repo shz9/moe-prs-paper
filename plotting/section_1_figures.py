@@ -13,6 +13,7 @@ sys.path.append(parent_dir)
 sys.path.append(osp.join(parent_dir, "model/"))
 sys.path.append(osp.join(parent_dir, "evaluation/"))
 
+from baseline_models import AttributePartitionedPRS, MultiPRS
 from combined_accuracy_plots import plot_combined_accuracy_metrics
 from evaluate_predictive_performance import stratified_evaluation
 from moe import MoEPRS
@@ -20,6 +21,7 @@ from plot_predictive_performance import postprocess_metrics_df
 from plot_utils import (
     ANALYSIS_TO_PHENOTYPE_MAP,
     BIOBANK_NAME_MAP_SHORT,
+    MODEL_NAME_MAP,
     SEX_LABEL_MAP,
     assign_ancestry_consistent_colors,
     read_transform_eval_metrics,
@@ -54,7 +56,7 @@ def plot_gate_mixing_weights_colored_by_ancestry(weights_df, output_f, order=Non
         data=weights_df,
         x="Age",
         y="P(Male_PGS)",
-        col="Phenotype",  # Creates one subplot per phenotype
+        col="phenotype",  # Creates one subplot per phenotype
         col_order=order,
         hue="Ancestry",  # Color by Sex
         hue_order=sort_groups(weights_df["Ancestry"].unique()),
@@ -75,11 +77,11 @@ def plot_gate_mixing_weights_colored_by_ancestry(weights_df, output_f, order=Non
     for lh in g.legend.legend_handles:
         lh.set_alpha(1)
 
-    # Remove the "Phenotype = " prefix from the title:
+    # Remove the "phenotype = " prefix from the title:
     for ax in g.axes.flat:
         title = ax.get_title()
-        if title.startswith("Phenotype = "):
-            ax.set_title(title.replace("Phenotype = ", ""))
+        if title.startswith("phenotype = "):
+            ax.set_title(title.replace("phenotype = ", ""))
 
     g.set_axis_labels(
         x_var="Age at recruitment", y_var="Mixing weight for male PRS\nP(Male_PRS)"
@@ -96,7 +98,7 @@ def plot_gate_mixing_weights_colored_by_sex(
         data=weights_df,
         x=x,
         y="P(Male_PGS)",
-        col="Phenotype",  # Creates one subplot per phenotype
+        col="phenotype",  # Creates one subplot per phenotype
         col_order=order,
         hue="Sex",  # Color by Sex
         hue_order=["Female", "Male"],
@@ -118,11 +120,11 @@ def plot_gate_mixing_weights_colored_by_sex(
     for lh in g.legend.legend_handles:
         lh.set_alpha(1)
 
-    # Remove the "Phenotype = " prefix from the title:
+    # Remove the "phenotype = " prefix from the title:
     for ax in g.axes.flat:
         title = ax.get_title()
-        if title.startswith("Phenotype = "):
-            ax.set_title(title.replace("Phenotype = ", ""))
+        if title.startswith("phenotype = "):
+            ax.set_title(title.replace("phenotype = ", ""))
 
     g.set_axis_labels(
         x_var=x or x_label, y_var="Mixing weight for male PRS\nP(Male_PRS)"
@@ -133,12 +135,13 @@ def plot_gate_mixing_weights_colored_by_sex(
 
 
 def plot_gate_mixing_weights_categorical(weights_df, output_f, order=None):
+
     g = sns.catplot(
         data=weights_df,
         x="Ancestry",
         y="P(Male_PGS)",
         hue="Sex",
-        col="Phenotype",
+        col="phenotype",
         col_order=order,
         kind="violin",
         inner=None,
@@ -169,11 +172,11 @@ def plot_gate_mixing_weights_categorical(weights_df, output_f, order=None):
     for lh in g.legend.legend_handles:
         lh.set_alpha(1)
 
-    # Remove the "Phenotype = " prefix from the title:
+    # Remove the "phenotype = " prefix from the title:
     for ax in g.axes.flat:
         title = ax.get_title()
-        if title.startswith("Phenotype = "):
-            ax.set_title(title.replace("Phenotype = ", ""))
+        if title.startswith("phenotype = "):
+            ax.set_title(title.replace("phenotype = ", ""))
 
     g.set_axis_labels(x_var="Ancestry", y_var="Mixing weight for male PRS\nP(Male_PRS)")
 
@@ -213,8 +216,8 @@ def extract_weights_data(biobank="ukbb"):
                 prs_col_names.append("P(Male_PGS)")
 
         w_df[prs_col_names] = moe_model.predict_proba(dataset)
-        w_df["Phenotype"] = (
-            phenotypes[pheno] + {"ukbb": " (UKB)", "cartagene": " (CaG)"}[biobank]
+        w_df["phenotype"] = (
+            phenotypes[pheno] + " (" + BIOBANK_NAME_MAP_SHORT[biobank] + ")"
         )
 
         dfs.append(w_df)
@@ -259,10 +262,21 @@ def extract_stratified_evaluation_metrics(
         dat, trained_models=None, cat_group_cols=category, min_group_size=20
     )
 
-    # Remove the "All" category:
-    eval_df = eval_df.loc[eval_df["EvalGroup"] != "All"]
+    eval_df = eval_df.loc[
+        (eval_df["eval_group"] != "All")
+        & (eval_df["metric"] == "Incremental_R2")
+        & (eval_df["metric_kind"] == "base")
+    ].copy()
+    eval_df.rename(
+        columns={
+            "model_name": "PGS",
+            "eval_group": "EvalGroup",
+            "value": "Incremental_R2",
+        },
+        inplace=True,
+    )
 
-    uniq_pgs = eval_df["PGS"].unique()
+    uniq_pgs = eval_df["PGS"].dropna().unique()
     male_pgs = [m for m in uniq_pgs if m.endswith("_M")][0]
     female_pgs = [m for m in uniq_pgs if m.endswith("_F")][0]
 
@@ -272,11 +286,6 @@ def extract_stratified_evaluation_metrics(
         index="EvalGroup", columns="PGS", values="Incremental_R2"
     ).reset_index()
     tr_df["Ratio"] = tr_df[male_pgs] / tr_df[female_pgs]
-
-    print("Phenotype:", pheno)
-    print("Test biobank:", test_biobank)
-    print(tr_df)
-    print("= = = = = = = ")
 
     return tr_df
 
@@ -386,13 +395,105 @@ def extract_accuracy_data(
             "Incremental_R2",
             category="Sex",
             aggregate_single_prs=False,
-            include_cohort_matched=False,
+            add_training_biobank_to_model_name=False,
         )
+
+        df["Model Name"] = df["Model Name"].replace("SexMatchedPRS", "Sex-matched PRS")
+        df["Model Name"] = df["Model Name"].replace("Male", "Male PRS")
+        df["Model Name"] = df["Model Name"].replace("Female", "Female PRS")
+
+        # Remove sex-matched PRS from evaluation groups other than "All"
+        df = df.loc[
+            ~(
+                (df["Model Name"] == "Sex-matched PRS")
+                & (df["Evaluation Group"] != "All")
+            )
+        ]
 
         dfs.append(df)
 
     dfs = pd.concat(dfs, axis=0).reset_index(drop=True)
-    dfs["Phenotype"] += {"ukbb": " (UKB)", "cartagene": " (CaG)"}[test_biobank]
+    dfs["phenotype"] += " (" + BIOBANK_NAME_MAP_SHORT[test_biobank] + ")"
+
+    return dfs
+
+
+def extract_non_eur_accuracy_data(test_biobank="ukbb"):
+    dfs = []
+
+    for pheno in phenotypes:
+        try:
+            dat = PRSDataset.from_pickle(
+                f"data/harmonized_data/{pheno}/{test_biobank}/test_data.pkl"
+            )
+        except Exception as e:
+            print(e)
+            continue
+
+        dat.filter_samples(dat.data["Ancestry"] != "EUR")
+        dat.data["SexG"] = dat.data["Sex"].astype(int).astype(str).map(SEX_LABEL_MAP)
+
+        trained_models = {}
+        model_root = f"data/trained_models/{pheno}/{test_biobank}/train_data"
+
+        try:
+            trained_models["MoEPRS"] = MoEPRS.from_saved_model(
+                f"{model_root}/{args.moe_model}.pkl"
+            )
+        except Exception as e:
+            print(e)
+        try:
+            trained_models["MultiPRS"] = MultiPRS.from_saved_model(
+                f"{model_root}/MultiPRS.pkl"
+            )
+        except Exception as e:
+            print(e)
+        try:
+            trained_models["SexMatchedPRS"] = AttributePartitionedPRS.from_saved_model(
+                f"{model_root}/SexMatchedPRS.pkl"
+            )
+        except Exception as e:
+            print(e)
+
+        df = stratified_evaluation(
+            dat,
+            trained_models=trained_models,
+            cat_group_cols=["SexG"],
+            min_group_size=20,
+        )
+
+        df["analysis_id"] = pheno
+        df["test_biobank"] = test_biobank
+        df["phenotype"] = ANALYSIS_TO_PHENOTYPE_MAP.get(pheno, pheno)
+        df["model_name"] = df["model_name"].map(
+            lambda x: MODEL_NAME_MAP.get(pheno, {}).get(x, x)
+        )
+
+        df = postprocess_metrics_df(
+            df,
+            "Incremental_R2",
+            category="SexG",
+            aggregate_single_prs=False,
+            add_training_biobank_to_model_name=False,
+            min_sample_size=20,
+        )
+
+        df["Model Name"] = df["Model Name"].replace("Male", "Male PRS")
+        df["Model Name"] = df["Model Name"].replace("Female", "Female PRS")
+        df["Model Name"] = df["Model Name"].replace("SexMatchedPRS", "Sex-matched PRS")
+
+        # Keep behavior consistent with the standard subpanel figure.
+        df = df.loc[
+            ~(
+                (df["Model Name"] == "Sex-matched PRS")
+                & (df["Evaluation Group"] != "All")
+            )
+        ]
+
+        dfs.append(df)
+
+    dfs = pd.concat(dfs, axis=0).reset_index(drop=True)
+    dfs["phenotype"] += f" ({BIOBANK_NAME_MAP_SHORT[test_biobank]})"
 
     return dfs
 
@@ -402,7 +503,9 @@ def plot_phenotypic_variance(pheno, biobank="ukbb"):
         f"data/harmonized_data/{pheno}/{biobank}/full_data.pkl"
     )
 
-    dataset.data["SexG"] = dataset.data["Sex"].astype(int).astype(str).map(SEX_LABEL_MAP)
+    dataset.data["SexG"] = (
+        dataset.data["Sex"].astype(int).astype(str).map(SEX_LABEL_MAP)
+    )
     dataset.data["AgeGroup2"] = np.array(["Age<=55", "Age>55"]).take(
         dataset.get_data_columns("Age").flatten() > 55
     )
@@ -519,19 +622,10 @@ if __name__ == "__main__":
         "Sex-matched PRS": "#66C2A5",
     }
 
-    hue_order = ["MoEPRS", "MultiPRS", "Sex-matched PRS", "Female PRS", "Male PRS"]
+    hue_order = ["Sex-matched PRS", "MoEPRS", "MultiPRS", "Female PRS", "Male PRS"]
     phenotype_order = ["Waist-hip ratio", "Log Testosterone", "Log Creatinine", "Urate"]
 
     ukbb_metrics_dfs = extract_accuracy_data()
-
-    ukbb_metrics_dfs["Model Name"] = ukbb_metrics_dfs["Model Name"].replace(
-        "SexMatchedPRS", "Sex-matched PRS"
-    )
-
-    ukbb_metrics_dfs["Model Name"] = ukbb_metrics_dfs["Model Name"] + np.where(
-        ukbb_metrics_dfs["Model Category"].isin(["Male", "Female"]), " PRS", ""
-    )
-
     ukbb_w_dfs = extract_weights_data()
 
     ukb_col_order = [p + " (UKB)" for p in phenotype_order]
@@ -539,11 +633,21 @@ if __name__ == "__main__":
     plot_combined_accuracy_metrics(
         ukbb_metrics_dfs,
         "figures/section_1/ukb_accuracy_subpanels.pdf",
-        column="Phenotype",
+        column="phenotype",
         col_order=ukb_col_order,
         palette=palette,
         hue_order=hue_order,
         test_models=[("MoEPRS", "MultiPRS"), ("MoEPRS", "Sex-matched PRS")],
+    )
+
+    ukbb_non_eur_metrics_dfs = extract_non_eur_accuracy_data(test_biobank="ukbb")
+    plot_combined_accuracy_metrics(
+        ukbb_non_eur_metrics_dfs,
+        "figures/section_1/ukb_non_eur_accuracy_subpanels.pdf",
+        column="phenotype",
+        col_order=ukb_col_order,
+        palette=palette,
+        hue_order=hue_order,
     )
 
     plot_gate_mixing_weights_colored_by_sex(
@@ -576,17 +680,6 @@ if __name__ == "__main__":
     cartagene_metrics_dfs = extract_accuracy_data(
         test_biobank="cartagene", train_biobank="cartagene"
     )
-
-    cartagene_metrics_dfs["Model Name"] = cartagene_metrics_dfs["Model Name"].replace(
-        "SexMatchedPRS", "Sex-matched PRS"
-    )
-
-    cartagene_metrics_dfs["Model Name"] = cartagene_metrics_dfs[
-        "Model Name"
-    ] + np.where(
-        cartagene_metrics_dfs["Model Category"].isin(["Male", "Female"]), " PRS", ""
-    )
-
     cartagene_w_dfs = extract_weights_data(biobank="cartagene")
 
     # Exclude testosterone:
@@ -595,11 +688,23 @@ if __name__ == "__main__":
     plot_combined_accuracy_metrics(
         cartagene_metrics_dfs,
         "figures/section_1/cartagene_accuracy_subpanels.pdf",
-        column="Phenotype",
+        column="phenotype",
         col_order=cag_col_order,
         palette=palette,
         hue_order=hue_order,
         test_models=[("MoEPRS", "MultiPRS"), ("MoEPRS", "Sex-matched PRS")],
+    )
+
+    cartagene_non_eur_metrics_dfs = extract_non_eur_accuracy_data(
+        test_biobank="cartagene"
+    )
+    plot_combined_accuracy_metrics(
+        cartagene_non_eur_metrics_dfs,
+        "figures/section_1/cartagene_non_eur_accuracy_subpanels.pdf",
+        column="phenotype",
+        col_order=cag_col_order,
+        palette=palette,
+        hue_order=hue_order,
     )
 
     plot_gate_mixing_weights_colored_by_sex(

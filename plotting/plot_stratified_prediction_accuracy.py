@@ -17,15 +17,15 @@ from error_bars import add_error_bars
 from evaluate_predictive_performance import stratified_evaluation
 from plot_utils import (
     BIOBANK_NAME_MAP_SHORT,
-    SEX_LABEL_MAP,
     METRIC_NAME_MAP,
-    MODEL_NAME_MAP,
+    SEX_LABEL_MAP,
     assign_models_consistent_colors,
+    reshape_eval_long_to_plot_wide,
 )
 from PRSDataset import PRSDataset
 
 
-def extract_stratified_evaluation_metrics(
+def estimate_stratified_evaluation_metrics(
     analysis_id,
     biobank,
     dataset="full_data",
@@ -110,9 +110,11 @@ def extract_stratified_evaluation_metrics(
         min_group_size=20,
     )
 
-    eval_df["PGS"] = eval_df["PGS"].map(lambda x: MODEL_NAME_MAP[analysis_id].get(x, x))
-
-    return eval_df
+    return reshape_eval_long_to_plot_wide(
+        eval_df,
+        analysis_id=analysis_id,
+        metric_kind="base",
+    )
 
 
 if __name__ == "__main__":
@@ -168,7 +170,7 @@ if __name__ == "__main__":
 
     for biobank, ancestries in biobank_group_dict.items():
         for anc in ancestries:
-            df = extract_stratified_evaluation_metrics(
+            df = estimate_stratified_evaluation_metrics(
                 args.phenotype,
                 biobank,
                 keep_ancestry=anc["Codes"],

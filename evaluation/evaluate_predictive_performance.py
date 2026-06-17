@@ -152,7 +152,7 @@ def stratified_evaluation(
 
     edf = evaluate_prs_models(
         prs_dataset,
-        fitted_models=preds,
+        trained_models=preds,
         model_catalog=model_catalog,
         ref_model_id=ref_model_id,
         metrics=metrics,
@@ -171,7 +171,7 @@ def stratified_evaluation(
             try:
                 edf = evaluate_prs_models(
                     prs_dataset,
-                    fitted_models=preds,
+                    trained_models=preds,
                     model_catalog=model_catalog,
                     ref_model_id=ref_model_id,
                     mask=msk,
@@ -194,7 +194,7 @@ def stratified_evaluation(
 
 def evaluate_prs_models(
     prs_dataset,
-    fitted_models=None,
+    trained_models=None,
     model_catalog=None,
     ref_model_id=None,
     mask=None,
@@ -226,10 +226,10 @@ def evaluate_prs_models(
         raise ValueError("No phenotypic variance in this group of individuals!")
 
     if prs_dataset.phenotype_likelihood == "binomial":
-        num_cases = phenotype.sum()
+        num_cases = int(phenotype.sum())
         if num_cases < 10 or num_cases > phenotype.shape[0] - 10:
             raise ValueError(
-                "Highly unbalanced case/control numbers; Cannot compute metrics reliably."
+                f"Highly unbalanced case/control numbers (Proportion: {num_cases}/{phenotype.shape[0]}); Cannot compute metrics reliably."
             )
 
     # --------------------------------------------------------------------------
@@ -264,8 +264,8 @@ def evaluate_prs_models(
             ]
         )
 
-    if fitted_models is not None:
-        fitted_df = fitted_models.loc[mask, :].reset_index(drop=True)
+    if trained_models is not None:
+        fitted_df = trained_models.loc[mask, :].reset_index(drop=True)
         if prs_df is None:
             prs_df = fitted_df
         else:
@@ -304,8 +304,18 @@ def evaluate_prs_models(
         if n < min_group_size:
             continue
 
+        # Extract the phenotype values for the remaining samples:
         phenotype_values = phenotype[keep]
+
+        # If the number cases/controls in the remaining samples is
+        # too small, skip this model:
+        if prs_dataset.phenotype_likelihood == "binomial":
+            num_cases = int(phenotype_values.sum())
+            if num_cases < 10 or num_cases > phenotype_values.shape[0] - 10:
+                continue
+
         pred_values = prs_df[model_id].values[keep]
+
         row_meta = (
             meta_df[meta_df["model_id"] == model_id].iloc[0].to_dict()
             if len(meta_df[meta_df["model_id"] == model_id]) > 0
@@ -313,19 +323,26 @@ def evaluate_prs_models(
         )
 
         for metric in metric_names:
-            if metric in INCREMENTAL_METRICS:
-                value = EVAL_METRICS[metric](
-                    phenotype_values, pred_values, covar.loc[keep, :]
-                )
-            else:
-                value = EVAL_METRICS[metric](phenotype_values, pred_values)
+            try:
+                if metric in INCREMENTAL_METRICS:
+                    value = EVAL_METRICS[metric](
+                        phenotype_values, pred_values, covar.loc[keep, :]
+                    )
+                else:
+                    value = EVAL_METRICS[metric](phenotype_values, pred_values)
 
-            se = np.nan
-            if "R2" in metric:
-                try:
-                    se = r2_stats(value, n)["SE"]
-                except AssertionError:
-                    se = 0.0
+                if "R2" in metric:
+                    try:
+                        se = r2_stats(value, n)["SE"]
+                    except AssertionError:
+                        se = np.nan
+                else:
+                    se = np.nan
+
+            except Exception as e:
+                print(f"Error evaluating metric {metric} on model {model_id}: {e}")
+                value = np.nan
+                se = np.nan
 
             records.append(
                 {

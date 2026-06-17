@@ -48,7 +48,7 @@ except ImportError:
 
 class GateModel(nn.Module):
     """
-    A generic implementation for the gating model. This function can accommodate
+    A generic implementation for the gating model. This module can accommodate
     linear + non-linear gating models.
     """
 
@@ -93,7 +93,17 @@ class GateModel(nn.Module):
         #   so keep bias=False to avoid duplicate intercept parameters.
         # - MLP gate: gate_add_intercept controls the final layer bias.
         final_bias = self.gate_add_intercept if is_mlp else False
-        layers.append(nn.Linear(input_dim, n_experts, bias=final_bias))
+        final_linear = nn.Linear(input_dim, n_experts, bias=final_bias)
+
+        # For the standard linear gate, start from the constant uniform gate.
+        # This makes PRS-in-gate runs begin in the MultiPRS-like submodel instead
+        # of with random PRS-dependent routing.
+        if not is_mlp:
+            nn.init.zeros_(final_linear.weight)
+            if final_linear.bias is not None:
+                nn.init.zeros_(final_linear.bias)
+
+        layers.append(final_linear)
 
         self.gate = nn.Sequential(*layers)
 
@@ -797,13 +807,19 @@ class Lit_MoEPRS(pl.LightningModule):
         rows = []
         if intercept is not None:
             rows.append(
-                pd.DataFrame(intercept.reshape(1, -1), index=["Intercept"], columns=expert_names)
+                pd.DataFrame(
+                    intercept.reshape(1, -1), index=["Intercept"], columns=expert_names
+                )
             )
 
-        rows.append(pd.DataFrame(scale.reshape(1, -1), index=["PRS"], columns=expert_names))
+        rows.append(
+            pd.DataFrame(scale.reshape(1, -1), index=["PRS"], columns=expert_names)
+        )
 
         if covar_coef is not None:
-            rows.append(pd.DataFrame(covar_coef.T, index=cov_names, columns=expert_names))
+            rows.append(
+                pd.DataFrame(covar_coef.T, index=cov_names, columns=expert_names)
+            )
 
         return pd.concat(rows, axis=0)
 
@@ -1042,12 +1058,12 @@ class TorchMoEPRS:
         d = self.prs_dataset
         d.set_backend("torch")
 
+        run_seed = int(seed)
+        make_deterministic(run_seed)
+
         self.lit_model = self._make_lit_model(family=d.phenotype_likelihood).to(
             self.device
         )
-
-        run_seed = int(seed)
-        make_deterministic(run_seed)
 
         trainer, lit = train_lit_model(
             self.lit_model,

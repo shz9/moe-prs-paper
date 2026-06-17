@@ -21,7 +21,7 @@ from eval_utils import generate_predictions, subsample_to_prevalence
 from evaluate_predictive_performance import evaluate_prs_models, stratified_evaluation
 from moe import GroupMeanWeightedPRS, MoEPRS
 from plot_pgs_admixture import plot_admixture_graphs
-from plot_stratified_prediction_accuracy import extract_stratified_evaluation_metrics
+from plot_stratified_prediction_accuracy import estimate_stratified_evaluation_metrics
 from plot_utils import (
     ANALYSIS_TO_PHENOTYPE_MAP,
     ANALYSIS_TO_TABLE_MAP,
@@ -30,9 +30,9 @@ from plot_utils import (
     METRIC_NAME_MAP,
     MODEL_NAME_MAP,
     assign_models_consistent_colors,
+    extract_accuracy_data_all_phenotypes,
 )
 from PRSDataset import PRSDataset
-from section_2_figures import extract_accuracy_data_all_phenotypes
 
 # -----------------------------------------------------------------------------------------
 
@@ -289,7 +289,7 @@ def extract_disease_mixing_quartile_metrics(
     ----------
     metric : str or list[str]
         Metric(s) to extract from evaluation
-        (e.g. "Liability_R2", "ROC_AUC", "PR_AUC").
+        (e.g. "Liability_R2", "AUROC", "AUPRC").
 
     Supports:
     - partition_method="threshold" (default): groups by probability threshold.
@@ -329,12 +329,7 @@ def extract_disease_mixing_quartile_metrics(
     group_col = grouping["group_col"]
     group_levels = grouping["group_levels"]
 
-    # For threshold_rules we evaluate each rule mask independently.
-    rule_masks = (
-        grouping["group_masks"]
-        if partition_method == "threshold" and threshold_rules is not None
-        else {}
-    )
+    group_masks = grouping["group_masks"]
 
     weighted_label = "Weighted PRS"
     weighted_excl_label = "Weighted PRS (exc. disease)"
@@ -357,67 +352,76 @@ def extract_disease_mixing_quartile_metrics(
         ),
     }
 
-    if len(rule_masks) > 0:
-        # Evaluate each rule mask as-is (independent groups).
-        dat.set_backend("numpy")
-        preds = generate_predictions(dat, trained_models)
-        eval_frames = []
+    def _to_plotting_wide(df_long):
+        if df_long.empty:
+            return df_long
+        base_df = df_long.loc[df_long["metric_kind"] == "base"].copy()
+        if base_df.empty:
+            return pd.DataFrame()
 
-        all_df = evaluate_prs_models(
-            dat,
-            other_models=preds,
-            metrics=requested_metrics,
-            evaluate_base_models=True,
-            min_group_size=min_group_size,
-        )
-        all_df["EvalCategory"] = "All"
-        all_df["EvalGroup"] = "All"
-        all_df["N"] = dat.N
-        eval_frames.append(all_df)
-
-        for group_label, msk in rule_masks.items():
-            try:
-                gdf = evaluate_prs_models(
-                    dat,
-                    other_models=preds,
-                    mask=msk,
-                    metrics=requested_metrics,
-                    evaluate_base_models=True,
-                    min_group_size=min_group_size,
-                )
-            except Exception:
-                continue
-
-            if gdf is None:
-                continue
-
-            gdf["EvalCategory"] = group_col
-            gdf["EvalGroup"] = group_label
-            gdf["N"] = int(np.sum(msk))
-            eval_frames.append(gdf)
-
-        if len(eval_frames) == 0:
-            raise ValueError(
-                "No valid evaluation groups were generated from threshold_rules."
+        val_wide = (
+            base_df.pivot_table(
+                index=["model_id", "model_name", "eval_group", "eval_category", "n"],
+                columns="metric",
+                values="value",
+                aggfunc="first",
             )
-
-        eval_df = pd.concat(eval_frames, ignore_index=True)
-    else:
-        eval_df = stratified_evaluation(
-            dat,
-            trained_models=trained_models,
-            metrics=requested_metrics,
-            cat_group_cols=[group_col],
-            min_group_size=min_group_size,
+            .reset_index()
+            .rename(columns={"model_name": "PGS", "eval_group": "EvalGroup"})
         )
 
-    missing_metrics = [m for m in requested_metrics if m not in eval_df.columns]
+        se_wide = (
+            base_df.pivot_table(
+                index=["model_id", "eval_group"],
+                columns="metric",
+                values="se",
+                aggfunc="first",
+            )
+            .reset_index()
+            .rename(columns={"eval_group": "EvalGroup"})
+        )
+        se_wide.columns = [
+            c if c in ["model_id", "EvalGroup"] else f"{c}_err" for c in se_wide.columns
+        ]
+
+        out = val_wide.merge(se_wide, on=["model_id", "EvalGroup"], how="left")
+        return out
+
+    # Use stratified_evaluation for all partition modes.
+    # For threshold_rules, create one binary categorical column per rule so each
+    # rule can be evaluated independently while preserving overlap semantics.
+    if partition_method == "threshold" and threshold_rules is not None:
+        strat_cols = []
+        for i, g in enumerate(group_levels):
+            col = f"{group_col}__rule_{i + 1}"
+            msk = np.asarray(group_masks[g], dtype=bool)
+            dat.data[col] = np.where(msk, g, "__other__")
+            strat_cols.append(col)
+    else:
+        strat_cols = [group_col]
+
+    eval_df_long = stratified_evaluation(
+        dat,
+        trained_models=trained_models,
+        metrics=requested_metrics,
+        cat_group_cols=strat_cols,
+        min_group_size=min_group_size,
+    )
+
+    # Keep only "All" and target mixing groups.
+    eval_df_long = eval_df_long.loc[
+        eval_df_long["eval_group"].isin(set(group_levels).union({"All"}))
+    ].copy()
+
+    missing_metrics = [
+        m for m in requested_metrics if m not in set(eval_df_long["metric"].unique())
+    ]
     if missing_metrics:
         raise ValueError(
             f"Requested metric(s) not found in evaluation output: {missing_metrics}"
         )
 
-    out_df = eval_df.copy()
+    out_df = _to_plotting_wide(eval_df_long)
     out_df["PGS"] = out_df["PGS"].map(lambda x: MODEL_NAME_MAP[analysis_id].get(x, x))
 
     if agg_features is None:
@@ -444,8 +448,9 @@ def extract_disease_mixing_quartile_metrics(
         return out
 
     group_rows = [{"EvalGroup": "All", **summarize_group(dat.data)}]
-    if len(rule_masks) > 0:
-        for group_label, msk in rule_masks.items():
+    if partition_method == "threshold" and threshold_rules is not None:
+        for group_label in group_levels:
+            msk = np.asarray(group_masks[group_label], dtype=bool)
             group_rows.append(
                 {"EvalGroup": group_label, **summarize_group(dat.data.loc[msk])}
             )
@@ -478,7 +483,7 @@ def plot_binary_mixing_group_panels(
     analysis_id,
     test_biobank="ukbb",
     dataset="test_data",
-    metric="ROC_AUC",
+    metric="AUROC",
     incremental_metric="Nagelkerke_R2",
     disease_prs_name=None,
     output_file=None,
@@ -762,7 +767,7 @@ def plot_binary_mixing_group_panels(
             if acc_ax.get_legend() is not None:
                 acc_ax.get_legend().remove()
 
-        if metric_name == "ROC_AUC":
+        if metric_name == "AUROC":
             acc_ax.set_xlim(0.5, 1.0)
 
     for i, metric_name in enumerate(requested_metrics):
@@ -866,7 +871,7 @@ def plot_prevalence_subsampled_mixing_accuracy_panels(
         ),
     }
     preds = generate_predictions(dat, trained_models)
-    metrics = ["ROC_AUC", incremental_metric]
+    metrics = ["AUROC", incremental_metric]
 
     phenotype_vals = np.asarray(dat.get_phenotype()).reshape(-1)
     overall_prevalence = float(np.nanmean(phenotype_vals))
@@ -907,7 +912,7 @@ def plot_prevalence_subsampled_mixing_accuracy_panels(
             try:
                 gdf = evaluate_prs_models(
                     dat,
-                    other_models=preds,
+                    fitted_models=preds,
                     mask=eval_mask,
                     metrics=metrics,
                     evaluate_base_models=True,
@@ -927,7 +932,34 @@ def plot_prevalence_subsampled_mixing_accuracy_panels(
         if len(eval_rows) == 0:
             return pd.DataFrame()
 
-        sdf = pd.concat(eval_rows, ignore_index=True)
+        sdf_long = pd.concat(eval_rows, ignore_index=True)
+        sdf_long = sdf_long.loc[sdf_long["metric_kind"] == "base"].copy()
+
+        val_wide = (
+            sdf_long.pivot_table(
+                index=["model_id", "model_name", "EvalGroup", "Scenario", "N"],
+                columns="metric",
+                values="value",
+                aggfunc="first",
+            )
+            .reset_index()
+            .rename(columns={"model_name": "PGS"})
+        )
+
+        se_wide = sdf_long.pivot_table(
+            index=["model_id", "EvalGroup", "Scenario"],
+            columns="metric",
+            values="se",
+            aggfunc="first",
+        ).reset_index()
+        se_wide.columns = [
+            c if c in ["model_id", "EvalGroup", "Scenario"] else f"{c}_err"
+            for c in se_wide.columns
+        ]
+
+        sdf = val_wide.merge(
+            se_wide, on=["model_id", "EvalGroup", "Scenario"], how="left"
+        )
         sdf["PGS"] = sdf["PGS"].map(lambda x: MODEL_NAME_MAP[analysis_id].get(x, x))
         return sdf
 
@@ -1045,7 +1077,7 @@ def plot_prevalence_subsampled_mixing_accuracy_panels(
         ax.set_axisbelow(True)
         ax.grid(True, axis="x", alpha=0.25)
 
-        if metric_name == "ROC_AUC":
+        if metric_name == "AUROC":
             ax.set_xlim(0.5, 1.0)
 
         if show_legend:
@@ -1061,7 +1093,7 @@ def plot_prevalence_subsampled_mixing_accuracy_panels(
     for col_idx, scenario_label in enumerate(scenario_order):
         draw_accuracy_panel(
             axes[0, col_idx],
-            "ROC_AUC",
+            "AUROC",
             scenario_label,
             show_legend=(col_idx == 0),
             show_y=(col_idx == 0),
@@ -1114,7 +1146,7 @@ def plot_disease_prs_age_sex_accuracy(
     elif keep_ancestry is not None:
         keep_ancestry = list(keep_ancestry)
 
-    eval_df = extract_stratified_evaluation_metrics(
+    eval_df = estimate_stratified_evaluation_metrics(
         analysis_id=analysis_id,
         biobank=test_biobank,
         dataset=dataset,
@@ -1200,6 +1232,166 @@ def plot_disease_prs_age_sex_accuracy(
     plt.close()
 
 
+def extract_minority_ancestry_accuracy_panels(
+    moe_model_name,
+    analysis_ids=None,
+    biobanks=("ukbb", "cartagene"),
+    dataset_by_biobank=None,
+    disease_prs_name_map=None,
+    metric="Nagelkerke_R2",
+    min_group_size=30,
+):
+    """
+    Plot pooled non-EUR (Ancestry != EUR) performance across phenotypes and biobanks.
+    Models shown: disease-specific PRS, MoEPRS, Weighted PRS, Weighted PRS (exc. disease).
+    """
+
+    if analysis_ids is None:
+        analysis_ids = sorted(
+            [
+                a
+                for a in ANALYSIS_TO_PHENOTYPE_MAP.keys()
+                if ANALYSIS_TO_TABLE_MAP.get(a) == "multitrait_prs_table"
+            ]
+        )
+
+    if dataset_by_biobank is None:
+        dataset_by_biobank = {"ukbb": "test_data", "cartagene": "full_data"}
+
+    if disease_prs_name_map is None:
+        disease_prs_name_map = {}
+
+    plot_rows = []
+    metric_err_col = f"{metric}_err"
+
+    for biobank in biobanks:
+        dataset = dataset_by_biobank.get(biobank, "test_data")
+
+        for analysis_id in analysis_ids:
+            try:
+                dat = PRSDataset.from_pickle(
+                    f"data/harmonized_data/{analysis_id}/{biobank}/{dataset}.pkl"
+                )
+            except Exception as e:
+                print(e)
+                continue
+
+            dat.filter_samples(dat.data["Ancestry"] != "EUR")
+            if dat.N < min_group_size:
+                continue
+
+            try:
+                ukb_moe = MoEPRS.from_saved_model(
+                    f"data/trained_models/{analysis_id}/ukbb/train_data/{moe_model_name}.pkl"
+                )
+            except Exception as e:
+                print(e)
+                continue
+            try:
+                ukb_multiprs = MultiPRS.from_saved_model(
+                    f"data/trained_models/{analysis_id}/ukbb/train_data/MultiPRS.pkl"
+                )
+            except Exception as e:
+                print(e)
+                continue
+
+            dat.data["MinorityGroup"] = "non-EUR"
+
+            disease_prs_name = disease_prs_name_map.get(
+                analysis_id, _get_disease_prs_name(analysis_id)
+            )
+            mapped_expert_names = [
+                MODEL_NAME_MAP[analysis_id].get(prs_id, prs_id)
+                for prs_id in ukb_moe.expert_cols
+            ]
+            if disease_prs_name not in mapped_expert_names:
+                print(disease_prs_name)
+                print(mapped_expert_names)
+                continue
+
+            disease_expert_idx = mapped_expert_names.index(disease_prs_name)
+
+            moe_label = f"{moe_model_name} (UKB)"
+            multiprs_label = "MultiPRS (UKB)"
+            weighted_label = "Weighted PRS"
+            weighted_excl_label = "Weighted PRS (exc. disease)"
+
+            trained_models = {
+                moe_label: ukb_moe,
+                multiprs_label: ukb_multiprs,
+                weighted_label: GroupMeanWeightedPRS(ukb_moe, "MinorityGroup"),
+                weighted_excl_label: GroupMeanWeightedPRS(
+                    ukb_moe, "MinorityGroup", exclude_models=[disease_expert_idx]
+                ),
+            }
+
+            try:
+                edf = stratified_evaluation(
+                    dat,
+                    trained_models=trained_models,
+                    cat_group_cols=None,
+                    metrics=[metric],
+                    evaluate_base_models=True,
+                    min_group_size=min_group_size,
+                )
+            except Exception as e:
+                print(e)
+                continue
+
+            edf = edf.loc[
+                (edf["metric"] == metric)
+                & (edf["metric_kind"] == "base")
+                & (edf["prediction_type"] == "prs_only")
+                & (edf["eval_group"] == "All")
+            ].copy()
+            if edf.empty:
+                continue
+
+            edf["PGS"] = edf["model_name"].map(
+                lambda x: MODEL_NAME_MAP[analysis_id].get(x, x)
+            )
+            edf.loc[edf["model_id"] == moe_label, "PGS"] = moe_label
+            edf.loc[edf["model_id"] == multiprs_label, "PGS"] = multiprs_label
+            edf.loc[edf["model_id"] == weighted_label, "PGS"] = weighted_label
+            edf.loc[edf["model_id"] == weighted_excl_label, "PGS"] = weighted_excl_label
+
+            keep_models = {
+                moe_label,
+                multiprs_label,
+                disease_prs_name,
+                weighted_label,
+                weighted_excl_label,
+            }
+            edf = edf.loc[edf["PGS"].isin(keep_models)].copy()
+            if edf.empty:
+                continue
+
+            edf["Model Name"] = edf["PGS"].replace(
+                {
+                    moe_label: "MoEPRS (UKB)",
+                    multiprs_label: "MultiPRS (UKB)",
+                    disease_prs_name: "Disease-specific PRS",
+                    weighted_label: "Weighted PRS",
+                    weighted_excl_label: "Weighted PRS (exc. disease)",
+                }
+            )
+            edf[metric] = edf["value"]
+            edf[metric_err_col] = edf["se"]
+            edf["Phenotype"] = ANALYSIS_TO_PHENOTYPE_MAP.get(analysis_id, analysis_id)
+            edf["Biobank"] = BIOBANK_NAME_MAP.get(biobank, biobank.upper())
+
+            cols = ["Model Name", "Phenotype", "Biobank", metric]
+            if metric_err_col in edf.columns:
+                cols.append(metric_err_col)
+            plot_rows.append(edf)  # [cols])
+
+    if len(plot_rows) == 0:
+        raise ValueError("No minority-ancestry evaluation results available to plot.")
+
+    plot_df = pd.concat(plot_rows, ignore_index=True)
+    return plot_df
+
+
 def plot_minority_ancestry_accuracy_panels(
     moe_model_name,
     analysis_ids=None,
@@ -1217,7 +1409,7 @@ def plot_minority_ancestry_accuracy_panels(
     """
 
     if output_file is None:
-        output_file = "figures/section_4/minority_ancestry_accuracy_metrics.eps"
+        output_file = "figures/section_4/minority_ancestry_accuracy_metrics.pdf"
 
     if analysis_ids is None:
         analysis_ids = sorted(
@@ -1314,10 +1506,10 @@ def plot_minority_ancestry_accuracy_panels(
             }
 
             try:
-                preds = generate_predictions(dat, trained_models)
-                edf = evaluate_prs_models(
+                edf = stratified_evaluation(
                     dat,
-                    other_models=preds,
+                    trained_models=trained_models,
+                    cat_group_cols=None,
                     metrics=[metric],
                     evaluate_base_models=True,
                     min_group_size=min_group_size,
@@ -1326,18 +1518,30 @@ def plot_minority_ancestry_accuracy_panels(
                 print(e)
                 continue
 
-            if metric not in edf.columns:
+            edf = edf.loc[
+                (edf["metric"] == metric)
+                & (edf["metric_kind"] == "base")
+                & (edf["prediction_type"] == "prs_only")
+                & (edf["eval_group"] == "All")
+            ].copy()
+            if edf.empty:
                 continue
 
-            edf["PGS"] = edf["PGS"].map(lambda x: MODEL_NAME_MAP[analysis_id].get(x, x))
+            edf["PGS"] = edf["model_name"].map(
+                lambda x: MODEL_NAME_MAP[analysis_id].get(x, x)
+            )
+            edf.loc[edf["model_id"] == moe_label, "PGS"] = moe_label
+            edf.loc[edf["model_id"] == multiprs_label, "PGS"] = multiprs_label
+            edf.loc[edf["model_id"] == weighted_label, "PGS"] = weighted_label
+            edf.loc[edf["model_id"] == weighted_excl_label, "PGS"] = weighted_excl_label
 
-            keep_models = [
+            keep_models = {
                 moe_label,
                 multiprs_label,
                 disease_prs_name,
                 weighted_label,
                 weighted_excl_label,
-            ]
+            }
             edf = edf.loc[edf["PGS"].isin(keep_models)].copy()
             if edf.empty:
                 continue
@@ -1351,6 +1555,8 @@ def plot_minority_ancestry_accuracy_panels(
                     weighted_excl_label: "Weighted PRS (exc. disease)",
                 }
             )
+            edf[metric] = edf["value"]
+            edf[metric_err_col] = edf["se"]
             edf["Phenotype"] = ANALYSIS_TO_PHENOTYPE_MAP.get(analysis_id, analysis_id)
             edf["Biobank"] = BIOBANK_NAME_MAP.get(biobank, biobank.upper())
 
@@ -1401,9 +1607,14 @@ if __name__ == "__main__":
         "--binary-metric",
         dest="binary_metric",
         type=str,
-        choices=
-        {"Liability_R2", "Nagelkerke_R2", "CoxSnell_R2","McFadden_R2",
-            "Liability_Probit_R2", "Liability_Logit_R2"},
+        choices={
+            "Liability_R2",
+            "Nagelkerke_R2",
+            "CoxSnell_R2",
+            "McFadden_R2",
+            "Liability_Probit_R2",
+            "Liability_Logit_R2",
+        },
         default="Nagelkerke_R2",
         help="The metric to plot for binary phenotypes.",
     )
@@ -1449,7 +1660,8 @@ if __name__ == "__main__":
                 binary_metric=args.binary_metric,
                 analysis_table_id=analysis_table,
                 dataset=["test_data", "full_data"][biobank == "cartagene"],
-                exclude_all=False,
+                exclude_all_group=False,
+                add_training_biobank_to_model_name=True,
             )
 
             metrics_df = metrics_df.loc[metrics_df["Evaluation Group"] == "All"]
@@ -1461,8 +1673,9 @@ if __name__ == "__main__":
 
         g = plot_combined_accuracy_metrics(
             metrics_dfs,
-            output_f=f"figures/section_4/accuracy_metrics_{tab_name}.eps",
+            output_f=f"figures/section_4/accuracy_metrics_{tab_name}.pdf",
             x="Phenotype",
+            metric=args.binary_metric,
             palette=palette,
             order=[p for p in phenotype_order if p in uniq_phenotypes],
             hue_order=hue_order,
@@ -1491,7 +1704,7 @@ if __name__ == "__main__":
         dataset_by_biobank={"ukbb": "test_data", "cartagene": "full_data"},
         metric=args.binary_metric,
         phenotype_order=phenotype_order,
-        output_file="figures/section_4/minority_ancestry_accuracy_metrics.eps",
+        output_file="figures/section_4/minority_ancestry_accuracy_metrics.pdf",
     )
 
     # ---------------- Plot explanatory graphs ----------------
@@ -1515,6 +1728,7 @@ if __name__ == "__main__":
             output_file=f"figures/section_4/group_summary_{analysis_id}_ukbb.png",
         )
 
+        """
         plot_prevalence_subsampled_mixing_accuracy_panels(
             moe_model_name=args.moe_model,
             analysis_id=analysis_id,
@@ -1525,6 +1739,7 @@ if __name__ == "__main__":
             n_quantiles=4,
             output_file=f"figures/section_4/group_accuracy_prevalence_{analysis_id}_ukbb.png",
         )
+        """
 
     for analysis_id in ["HF_MT"]:
         plot_binary_mixing_group_panels(

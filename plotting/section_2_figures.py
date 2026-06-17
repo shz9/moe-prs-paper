@@ -19,66 +19,13 @@ from combined_accuracy_plots import plot_combined_accuracy_metrics
 from eval_utils import rowwise_cosine_similarity
 from moe import MoEPRS
 from plot_pgs_admixture import plot_admixture_graphs
-from plot_predictive_performance import postprocess_metrics_df
 from plot_utils import (
     ANALYSIS_TO_PHENOTYPE_MAP,
     ANALYSIS_TO_TABLE_MAP,
     BIOBANK_NAME_MAP_SHORT,
-    read_transform_eval_metrics,
+    extract_accuracy_data_all_phenotypes,
 )
 from PRSDataset import PRSDataset
-
-
-def extract_accuracy_data_all_phenotypes(
-    moe_model_name,
-    biobank,
-    dataset="test_data",
-    analysis_table_id="multi_ancestry_prs_table",
-    binary_metric="Nagelkerke_R2",
-    keep_analyses=None,
-    exclude_analyses=None,
-    exclude_all=True,
-):
-    analysis_results = []
-
-    for d in glob.glob(f"data/harmonized_data/*/{biobank}"):
-        analysis_id = d.split("/")[-2]
-        if ANALYSIS_TO_TABLE_MAP.get(analysis_id) != analysis_table_id:
-            continue
-
-        if keep_analyses is not None:
-            if analysis_id not in keep_analyses:
-                continue
-
-        if exclude_analyses is not None:
-            if analysis_id in exclude_analyses:
-                continue
-
-        analysis_results.append(
-            extract_accuracy_data(
-                moe_model_name,
-                analysis_id,
-                biobank,
-                dataset=dataset,
-                exclude_all=exclude_all,
-            )
-        )
-
-    df = pd.concat(analysis_results).reset_index(drop=True)
-
-    # Simplify the ancestry weighted model:
-    if biobank == "ukbb":
-        df = df.loc[df["Model Name"] != "Ancestry-weighted PRS (CaG)"]
-        df["Model Name"] = df["Model Name"].replace(
-            "Ancestry-weighted PRS (UKB)", "Ancestry-weighted PRS"
-        )
-    else:
-        df = df.loc[df["Model Name"] != "Ancestry-weighted PRS (UKB)"]
-        df["Model Name"] = df["Model Name"].replace(
-            "Ancestry-weighted PRS (CaG)", "Ancestry-weighted PRS"
-        )
-
-    return df
 
 
 def extract_mixing_weight_similarity(
@@ -141,65 +88,6 @@ def extract_mixing_weight_similarity(
     return pd.DataFrame(sim_result)
 
 
-def extract_accuracy_data(
-    moe_model_name,
-    analysis_id,
-    test_biobank,
-    metric="Incremental_R2",
-    dataset="test_data",
-    evaluation_category="Coarse Ancestry",
-    exclude_all=True,
-):
-    # Extract accuracy metrics:
-    f = f"data/evaluation/{analysis_id}/{test_biobank}/{dataset}.csv"
-    df = read_transform_eval_metrics(f)
-
-    df = df.loc[
-        (df["model_category"] != "MoE")
-        | df["model_name"].isin(
-            [
-                f"{moe_model_name}",
-            ]
-        )
-    ]
-
-    df = df.loc[
-        df["model_category"].isin(
-            ["MoE", "MultiPRS", "AncestryWeightedPRS"]
-        )  # <- Ensemble model categories
-        | (df["train_biobank"] == test_biobank.upper())
-    ]
-
-    # Rename the ensemble models for clarity:
-    df["model_name"] = df["model_name"].replace(
-        {
-            moe_model_name: "MoEPRS",
-            "MultiPRS": "MultiPRS",
-            "AncestryWeightedPRS": "Ancestry-weighted PRS",
-        }
-    )
-
-    # Correction for binary phenotypes:
-    if metric == "Incremental_R2" and "Nagelkerke_R2" in set(df["metric"].unique()):
-        metric = "Nagelkerke_R2"
-
-    dfs = postprocess_metrics_df(
-        df,
-        metric,
-        category=evaluation_category,
-        min_sample_size=50,
-        aggregate_single_prs=True,
-    )
-
-    if exclude_all:
-        dfs = dfs.loc[dfs["Evaluation Group"] != "All"]
-
-    dfs["Phenotype"] = ANALYSIS_TO_PHENOTYPE_MAP[analysis_id]
-    # dfs["Phenotype"] += f" ({BIOBANK_NAME_MAP_SHORT[test_biobank]})"
-
-    return dfs
-
-
 # -----------------------------------------------------------------------------------------
 
 if __name__ == "__main__":
@@ -219,9 +107,14 @@ if __name__ == "__main__":
         "--binary-metric",
         dest="binary_metric",
         type=str,
-        choices=
-        {"Liability_R2", "Nagelkerke_R2", "CoxSnell_R2","McFadden_R2",
-            "Liability_Probit_R2", "Liability_Logit_R2"},
+        choices={
+            "Liability_R2",
+            "Nagelkerke_R2",
+            "CoxSnell_R2",
+            "McFadden_R2",
+            "Liability_Probit_R2",
+            "Liability_Logit_R2",
+        },
         default="Nagelkerke_R2",
         help="The metric to plot for binary phenotypes.",
     )
@@ -280,6 +173,7 @@ if __name__ == "__main__":
             biobank,
             binary_metric=args.binary_metric,
             exclude_analyses=["LDL_ADJ_MA", "TC_ADJ_MA", "DBP_ADJ_MA", "SBP_ADJ_MA"],
+            add_training_biobank_to_model_name=True,
         )
 
         metrics_df["Evaluation Group"] = (
@@ -292,7 +186,7 @@ if __name__ == "__main__":
 
         g = plot_combined_accuracy_metrics(
             metrics_df,
-            output_f=f"figures/section_2/{biobank}_metrics.eps",
+            output_f=f"figures/section_2/{biobank}_metrics.pdf",
             x="Phenotype",
             palette=palette,
             order=phenotype_order,
@@ -363,7 +257,7 @@ if __name__ == "__main__":
             f"Concordance of mixing weights between\nCaG- and UKB-trained MoEPRS on {bb_short} samples"
         )
         plt.savefig(
-            f"figures/section_2/mixing_weight_sim_{biobank}_{args.sim_metric}.eps",
+            f"figures/section_2/mixing_weight_sim_{biobank}_{args.sim_metric}.pdf",
             bbox_inches="tight",
         )
         plt.close()

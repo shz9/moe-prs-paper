@@ -269,24 +269,28 @@ def _evaluate_param_combo(
                 f"evaluate_prs_models failed for params={params} on fold {fold_idx}: {e}"
             )
 
-        if "PGS" not in eval_df.columns:
+        if "model_id" not in eval_df.columns:
             raise RuntimeError(
-                "evaluate_prs_models output must contain a 'PGS' column."
+                "evaluate_prs_models output must contain a 'model_id' column."
             )
 
-        filtered = eval_df[eval_df["PGS"] == model_name]
+        filtered = eval_df[eval_df["model_id"] == model_name]
         if filtered.shape[0] == 0:
             raise RuntimeError(
                 f"evaluate_prs_models did not return an entry for model '{model_name}' on fold {fold_idx}."
             )
 
-        if evaluation_metric not in filtered.columns:
+        if evaluation_metric not in filtered["metric"].unique():
             raise RuntimeError(
-                f"Evaluation metric '{evaluation_metric}' not found in evaluation DataFrame columns: {list(filtered.columns)}"
+                f"Evaluation metric '{evaluation_metric}' not found in evaluation DataFrame."
             )
 
         # mean across multiple rows if present
-        metric_val = float(filtered[evaluation_metric].astype(float).mean())
+        metric_val = float(
+            filtered.loc[filtered["metric"] == evaluation_metric, "value"]
+            .astype(float)
+            .mean()
+        )
         fold_metric_values.append(metric_val)
 
     mean_metric = float(np.mean(fold_metric_values))
