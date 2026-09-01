@@ -184,7 +184,7 @@ def evaluate_dataset(dataset_path):
         config = pickle.load(f)
 
     moe_models = extract_trained_models(
-        dataset_path, model_subset=["MoE-global-int", "MoE-CFG"]
+        dataset_path, model_subset=["MoE", "MoE-CFG"]
     )
 
     true_proba = extract_true_proba(dataset, config)
@@ -201,9 +201,11 @@ def evaluate_dataset(dataset_path):
             {
                 "Heritability": config["heritability"],
                 "Simulation Scenario": config["simulation_type"],
-                "Model": {"MoE-global-int": "MoEPRS", "MoE-CFG": "MultiPRS"}[
-                    model_name
-                ],
+                "Model": {
+                    "MoE": "MoEPRS",
+                    "MoE-global-int": "MoEPRS",
+                    "MoE-CFG": "MultiPRS",
+                }[model_name],
             }
         )
 
@@ -229,16 +231,29 @@ if __name__ == "__main__":
         help="Number of jobs to launch when performing evaluation",
     )
     parser.add_argument(
+        "--analysis-id",
         "--phenotype",
+        dest="analysis_id",
         type=str,
-        default="HEIGHT",
-        help="The phenotype to plot the simulation results for.",
+        default="HEIGHT_MA",
+        help="Analysis ID to plot simulation results for. --phenotype is kept as a legacy alias.",
+    )
+    parser.add_argument(
+        "--biobank",
+        type=str,
+        default="ukbb",
+        help="Biobank ID to plot simulation results for.",
     )
     args = parser.parse_args()
 
     dataset_paths = glob.glob(
-        f"data/harmonized_data_simulations/sim_*/{args.phenotype}/ukbb/*_h0.*/test_data.pkl"
+        f"data/harmonized_data_simulations/sim_*/{args.analysis_id}/{args.biobank}/*_h0.*/test_data.pkl"
     )
+    if len(dataset_paths) == 0:
+        raise FileNotFoundError(
+            "No simulation test datasets found for "
+            f"analysis_id={args.analysis_id}, biobank={args.biobank}."
+        )
 
     results = Parallel(n_jobs=args.jobs, backend="multiprocessing")(
         delayed(evaluate_dataset)(path) for path in dataset_paths
@@ -274,7 +289,9 @@ if __name__ == "__main__":
         if title.startswith("Scenario = "):
             ax.set_title(title.replace("Scenario = ", ""))
 
-    plt.savefig(f"figures/simulations/gate_performance_Brier_{args.phenotype}.eps")
+    plt.savefig(
+        f"figures/simulations/gate_performance_Brier_{args.analysis_id}_{args.biobank}.eps"
+    )
     plt.close()
 
     discrete_perf_subset = predictive_perf.loc[
@@ -304,5 +321,7 @@ if __name__ == "__main__":
         if title.startswith("Scenario = "):
             ax.set_title(title.replace("Scenario = ", ""))
 
-    plt.savefig(f"figures/simulations/gate_performance_accuracy_{args.phenotype}.eps")
+    plt.savefig(
+        f"figures/simulations/gate_performance_accuracy_{args.analysis_id}_{args.biobank}.eps"
+    )
     plt.close()

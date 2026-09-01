@@ -1,6 +1,6 @@
 #!/bin/bash
 
-mkdir -p ./log/model_fit/
+mkdir -p ./log/calpred/
 
 analysis_csv=${1:-""}
 
@@ -43,31 +43,5 @@ mapfile -t analysis_ids < <(printf '%s\n' "${analysis_ids[@]}" | awk 'NF' | sort
 
 for an_id in "${analysis_ids[@]}"
 do
-  mapfile -t datasets < <(
-    find data/harmonized_data/"$an_id" \
-      -mindepth 3 -maxdepth 3 -type f -name train_data.pkl | sort
-  )
-
-  if [[ ${#datasets[@]} -eq 0 ]]; then
-    echo "Warning: no cross-validation training datasets found for $an_id" >&2
-    continue
-  fi
-
-  for dataset in "${datasets[@]}"
-  do
-    fold=$(basename "$(dirname "$dataset")")
-    biobank=$(basename "$(dirname "$(dirname "$dataset")")")
-    dataset_name=$(basename "$dataset" .pkl)
-    model_parent=$(dirname "$dataset")
-    model_parent=${model_parent/harmonized_data/trained_models}
-    output_dir="$model_parent/$dataset_name"
-
-    if [[ -e "$output_dir" ]]; then
-      echo "Skipping $an_id ($biobank, $fold): output already exists at $output_dir"
-      continue
-    fi
-
-    sbatch -J "${an_id}_${biobank}_${fold}" \
-      model/train_job.sh "$an_id" "$dataset"
-  done
+  sbatch -J "calpred_$an_id" calpred_analysis/calpred_job.sh "$an_id"
 done

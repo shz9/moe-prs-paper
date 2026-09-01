@@ -1,4 +1,5 @@
 import argparse
+import glob
 import os.path as osp
 import sys
 
@@ -14,11 +15,13 @@ sys.path.append(osp.join(parent_dir, "model/"))
 sys.path.append(osp.join(parent_dir, "evaluation/"))
 
 from error_bars import add_error_bars
+from eval_utils import DEFAULT_MIN_GROUP_SIZE
 from evaluate_predictive_performance import stratified_evaluation
 from plot_utils import (
     BIOBANK_NAME_MAP_SHORT,
     METRIC_NAME_MAP,
     SEX_LABEL_MAP,
+    aggregate_cross_validation_metrics,
     assign_models_consistent_colors,
     reshape_eval_long_to_plot_wide,
 )
@@ -33,6 +36,8 @@ def estimate_stratified_evaluation_metrics(
     keep_ancestry=None,
     exclude_ancestry=None,
     category="Sex+Age",
+    metric=None,
+    _return_long=False,
 ):
     if isinstance(keep_ancestry, str):
         keep_ancestry = [keep_ancestry]
@@ -42,21 +47,65 @@ def estimate_stratified_evaluation_metrics(
 
     if isinstance(category, str):
         category = [category]
+    else:
+        category = list(category)
+
+    category_set = set(category)
+
+    if not _return_long and dataset in ("full_data", "test_data"):
+        fold_paths = sorted(
+            glob.glob(
+                f"data/harmonized_data/{analysis_id}/{biobank}/"
+                "fold_*/test_data.pkl"
+            )
+        )
+        if fold_paths:
+            fold_eval_dfs = []
+            for fold_path in fold_paths:
+                fold = osp.basename(osp.dirname(fold_path))
+                fold_eval_df = estimate_stratified_evaluation_metrics(
+                    analysis_id=analysis_id,
+                    biobank=biobank,
+                    dataset=f"{fold}/test_data",
+                    trained_models=trained_models,
+                    keep_ancestry=keep_ancestry,
+                    exclude_ancestry=exclude_ancestry,
+                    category=category,
+                    metric=metric,
+                    _return_long=True,
+                )
+                fold_eval_df["test_fold"] = fold
+                fold_eval_df["train_fold"] = fold
+                fold_eval_dfs.append(fold_eval_df)
+
+            eval_df = aggregate_cross_validation_metrics(
+                pd.concat(fold_eval_dfs, ignore_index=True)
+            )
+            return reshape_eval_long_to_plot_wide(
+                eval_df,
+                analysis_id=analysis_id,
+                metric_kind="base",
+            )
 
     dat = PRSDataset.from_pickle(
         f"data/harmonized_data/{analysis_id}/{biobank}/{dataset}.pkl"
     )
 
-    # ------------------ Add information about genetic distance to Europeans -----------------------
+    needs_pc_groups = category_set.intersection(
+        {"Genetic_Distance_Q", "PC1_Q", "PC2_Q"}
+    )
+    if needs_pc_groups:
+        pc_mat = dat.get_data_columns([f"PC{i + 1}" for i in range(10)])
+        eur_centroid = np.median(
+            pc_mat[(dat.data["Ancestry"] == "EUR").values, :], axis=0
+        )
 
-    pc_mat = dat.get_data_columns([f"PC{i + 1}" for i in range(10)])
-    eur_centroid = np.median(pc_mat[(dat.data["Ancestry"] == "EUR").values, :], axis=0)
-
-    dat.data["Genetic_Distance"] = np.linalg.norm(pc_mat - eur_centroid, axis=1)
-    dat.data["PC1_DIST"] = pc_mat[:, 0] - eur_centroid[0]
-    dat.data["PC2_DIST"] = pc_mat[:, 1] - eur_centroid[1]
-
-    # ----------------------------------------------------------------------------------------------
+        if "Genetic_Distance_Q" in category_set:
+            dat.data["Genetic_Distance"] = np.linalg.norm(pc_mat - eur_centroid, axis=1)
+        if "PC1_Q" in category_set:
+            dat.data["PC1_DIST"] = pc_mat[:, 0] - eur_centroid[0]
+        if "PC2_Q" in category_set:
+            dat.data["PC2_DIST"] = pc_mat[:, 1] - eur_centroid[1]
 
     # Apply filters:
     if keep_ancestry is not None:
@@ -66,49 +115,55 @@ def estimate_stratified_evaluation_metrics(
 
     # ----------------------------------------------------------------------------------------------
 
-    # Find genetic distance quartiles:
-    dat.data["Genetic_Distance_Q"] = pd.qcut(
-        dat.data["Genetic_Distance"], 4, labels=[f"GD_Q{i + 1}" for i in range(4)]
-    ).astype(str)
-    dat.data["PC1_Q"] = pd.qcut(
-        dat.data["PC1_DIST"], 4, labels=[f"PC1_Q{i + 1}" for i in range(4)]
-    ).astype(str)
-    dat.data["PC2_Q"] = pd.qcut(
-        dat.data["PC2_DIST"], 4, labels=[f"PC2_Q{i + 1}" for i in range(4)]
-    ).astype(str)
+    if "Genetic_Distance_Q" in category_set:
+        dat.data["Genetic_Distance_Q"] = pd.qcut(
+            dat.data["Genetic_Distance"], 4, labels=[f"GD_Q{i + 1}" for i in range(4)]
+        ).astype(str)
+    if "PC1_Q" in category_set:
+        dat.data["PC1_Q"] = pd.qcut(
+            dat.data["PC1_DIST"], 4, labels=[f"PC1_Q{i + 1}" for i in range(4)]
+        ).astype(str)
+    if "PC2_Q" in category_set:
+        dat.data["PC2_Q"] = pd.qcut(
+            dat.data["PC2_DIST"], 4, labels=[f"PC2_Q{i + 1}" for i in range(4)]
+        ).astype(str)
 
-    # ----------------------------------------
-    # Define age groups:
-    bins = [0, 50, 60, float("inf")]
-    labels = ["Age<50", "Age 50–60", "Age>60"]
+    if "AgeGroup3" in category_set:
+        dat.data["AgeGroup3"] = pd.cut(
+            dat.data["Age"],
+            bins=[0, 50, 60, float("inf")],
+            labels=["Age<50", "Age 50–60", "Age>60"],
+            right=False,
+        ).astype(str)
+    if "AgeGroup4" in category_set:
+        dat.data["AgeGroup4"] = pd.qcut(
+            dat.data["Age"], 4, labels=[f"Age Q{i + 1}" for i in range(4)]
+        ).astype(str)
+    if category_set.intersection({"AgeGroup2", "Sex+Age"}):
+        dat.data["AgeGroup2"] = np.array(["Age<=55", "Age>55"]).take(
+            dat.get_data_columns("Age").flatten() > 55
+        )
 
-    dat.data["AgeGroup3"] = pd.cut(
-        dat.data["Age"], bins=bins, labels=labels, right=False
-    ).astype(str)
-    dat.data["AgeGroup4"] = pd.qcut(
-        dat.data["Age"], 4, labels=[f"Age Q{i + 1}" for i in range(4)]
-    ).astype(str)
-    dat.data["AgeGroup2"] = np.array(["Age<=55", "Age>55"]).take(
-        dat.get_data_columns("Age").flatten() > 55
-    )
+    if category_set.intersection({"SexG", "Ancestry+Sex", "Sex+Age"}):
+        dat.data["SexG"] = dat.data["Sex"].astype(int).astype(str).map(SEX_LABEL_MAP)
 
-    # ----------------------------------------
-    # Map sex labels from integers to strings:
-    dat.data["SexG"] = dat.data["Sex"].astype(int).astype(str).map(SEX_LABEL_MAP)
-
-    # ----------------------------------------
-    # Add composite columns for stratification:
-    dat.data["Ancestry+Sex"] = dat.data["Ancestry"] + "-" + dat.data["SexG"].values
-    dat.data["Sex+Age"] = (
-        dat.data["SexG"].values + "\n(" + dat.data["AgeGroup2"].values + ")"
-    )
+    if "Ancestry+Sex" in category_set:
+        dat.data["Ancestry+Sex"] = dat.data["Ancestry"] + "-" + dat.data["SexG"].values
+    if "Sex+Age" in category_set:
+        dat.data["Sex+Age"] = (
+            dat.data["SexG"].values + "\n(" + dat.data["AgeGroup2"].values + ")"
+        )
 
     eval_df = stratified_evaluation(
         dat,
         trained_models=trained_models,  # {'MoEPRS': moe_model},
         cat_group_cols=category,
-        min_group_size=20,
+        metrics=None if metric is None else [metric],
+        min_group_size=DEFAULT_MIN_GROUP_SIZE,
     )
+
+    if _return_long:
+        return eval_df
 
     return reshape_eval_long_to_plot_wide(
         eval_df,
@@ -175,6 +230,7 @@ if __name__ == "__main__":
                 biobank,
                 keep_ancestry=anc["Codes"],
                 category=["AgeGroup2", "SexG", "Sex+Age"],
+                metric=args.metric,
             )
 
             df.rename(columns={"PGS": "Stratified PGS"}, inplace=True)

@@ -10,9 +10,36 @@ import pickle
 
 import numpy as np
 from magenpy.utils.system_utils import makedir
-from moe import MoEPRS
 from PRSDataset import PRSDataset
 from sklearn.preprocessing import StandardScaler
+
+
+def _parse_analysis_and_biobank(dataset_path, dataset):
+    """
+    Resolve the current analysis ID / biobank convention from a harmonized dataset path.
+
+    Expected path convention:
+        data/harmonized_data/{analysis_id}/{biobank}/{split}.pkl
+    """
+
+    path_parts = osp.normpath(dataset_path).split(osp.sep)
+
+    try:
+        harmonized_idx = path_parts.index("harmonized_data")
+        path_analysis_id = path_parts[harmonized_idx + 1]
+        biobank = path_parts[harmonized_idx + 2]
+    except (ValueError, IndexError):
+        path_analysis_id = None
+        biobank = "unknown_biobank"
+
+    analysis_id = getattr(dataset, "analysis_id", None) or path_analysis_id
+    if analysis_id is None:
+        raise ValueError(
+            "Could not resolve analysis_id from the PRSDataset object or dataset path. "
+            "Expected data/harmonized_data/{analysis_id}/{biobank}/{split}.pkl."
+        )
+
+    return analysis_id, biobank
 
 
 def _add_residual_component(sim_pgs, h2):
@@ -291,7 +318,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--dataset",
         type=str,
-        default="data/harmonized_data/HEIGHT/ukbb/full_data.pkl",
+        default="data/harmonized_data/HEIGHT_MA/ukbb/full_data.pkl",
         help="Path to PRS dataset used for generating simulations.",
     )
     parser.add_argument(
@@ -316,10 +343,12 @@ if __name__ == "__main__":
     print("Dataset:", args.dataset)
     print("Heritability:", args.h2)
 
-    original_dataset = "/".join(args.dataset.split("/")[-3:-1])
-    global_output_dir = osp.join(args.output_dir, original_dataset)
-
     dataset = PRSDataset.from_pickle(args.dataset)
+    analysis_id, biobank = _parse_analysis_and_biobank(args.dataset, dataset)
+    global_output_dir = osp.join(args.output_dir, analysis_id, biobank)
+
+    print("Analysis ID:", analysis_id)
+    print("Biobank:", biobank)
 
     print("Simulating single model scenario...")
     single_model_simulation(dataset, args.h2)

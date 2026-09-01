@@ -19,8 +19,8 @@ export R_LIBS="env/R_phewas_env"
 Rscript data_preparation/2_prepare_validation_data/ukbb/extract_binary_phenotypes.R \
         -f "/project/rpp-aevans-ab/neurohub/UKB/Tabular/current.csv" \
         --withdrawn-file "/project/rpp-aevans-ab/neurohub/UKB/Withdrawals/w45551_20250818.csv" \
-        -p 250.2,250.1,427.2,428,401.1,411,290,274.1,495,433,433.1 \
-        -n T2D,T1D,AF,HF,HTN,CAD,DEM,GOUT,ASTHMA,STR,STR_SPEC \
+        -p 250.2,250.1,427.2,428,401.1,411,274.1,495,433,433.1 \
+        -n T2D,T1D,AF,HF,HTN,CAD,GOUT,ASTHMA,STR,STR_SPEC \
         -o "data/phenotypes/ukbb/" \
         --include-selfreported \
         --apply-phecode-exclusion

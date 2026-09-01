@@ -10,9 +10,11 @@ from magenpy.utils.system_utils import makedir
 parent_dir = osp.dirname(osp.dirname(osp.abspath(__file__)))
 sys.path.append(parent_dir)
 sys.path.append(osp.join(parent_dir, "model/"))
+sys.path.append(osp.join(parent_dir, "evaluation/"))
 
 
 from gate_interpretation import plot_expert_weights
+from eval_utils import DEFAULT_MIN_GROUP_SIZE
 from moe import MoEPRS
 from moe_pytorch import TorchMoEPRS
 from plot_utils import SEX_LABEL_MAP, MODEL_NAME_MAP, sort_groups
@@ -27,7 +29,7 @@ def plot_admixture_graphs(
     group_col=None,
     sort_col=None,
     sorted_groups=None,
-    min_group_size=50,
+    min_group_size=DEFAULT_MIN_GROUP_SIZE,
     max_group_size=10_000,
     subsample=False,
     agg_mechanism="mean",

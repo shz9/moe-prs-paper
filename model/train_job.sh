@@ -13,8 +13,26 @@
 source "env/moe/bin/activate"
 
 analysis_id=${1:-"HEIGHT_MA"}
+dataset_path=${2:-""}
 
-for dataset in data/harmonized_data/"$analysis_id"/*/train_data.pkl
+if [[ -n "$dataset_path" ]]; then
+  if [[ ! -f "$dataset_path" ]]; then
+    echo "Training dataset not found: $dataset_path" >&2
+    exit 1
+  fi
+  datasets=("$dataset_path")
+else
+  # Backwards-compatible manual mode: train every fold for the analysis.
+  shopt -s nullglob
+  datasets=(data/harmonized_data/"$analysis_id"/*/fold_*/train_data.pkl)
+fi
+
+if [[ ${#datasets[@]} -eq 0 ]]; then
+  echo "No cross-validation training datasets found for analysis: $analysis_id" >&2
+  exit 1
+fi
+
+for dataset in "${datasets[@]}"
 do
   # If the analysis ID contains *_MT*, add PRS to gate input
   # Otherwise, skip adding PRS to gate input

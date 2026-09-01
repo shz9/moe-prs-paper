@@ -2,6 +2,7 @@ import argparse
 import glob
 import os.path as osp
 import sys
+from functools import lru_cache
 from itertools import combinations
 
 import matplotlib.pyplot as plt
@@ -10,7 +11,6 @@ import pandas as pd
 import seaborn as sns
 from magenpy.utils.system_utils import makedir
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from numpy.ma.core import add
 from scipy.spatial.distance import jensenshannon
 
 parent_dir = osp.dirname(osp.dirname(osp.abspath(__file__)))
@@ -29,6 +29,7 @@ from plot_utils import (
     ANALYSIS_TO_PHENOTYPE_MAP,
     ANALYSIS_TO_TABLE_MAP,
     BIOBANK_NAME_MAP_SHORT,
+    METRIC_NAME_MAP,
     MODEL_NAME_MAP,
     assign_models_consistent_colors,
     extract_accuracy_data_all_phenotypes,
@@ -36,21 +37,52 @@ from plot_utils import (
 from PRSDataset import PRSDataset
 
 
+ANCESTRY_PROBA_COLS = ["AFR", "AMR", "CSA", "EAS", "EUR", "MID"]
+SECTION3_FONT_SCALE = 1.0
+SECTION3_HALF_PANEL_FIGSIZE = (7.2, 3.2)
+SECTION3_QUARTER_PANEL_FIGSIZE = (3.45, 3.2)
+CONCORDANCE_FIGSIZE = SECTION3_HALF_PANEL_FIGSIZE
+
+PHENOTYPE_LABEL_MAP = {
+    "Standing Height": "Height",
+    "Log Body Mass Index": "Log(BMI)",
+    "Diastolic blood pressure": "DBP",
+    "Systolic blood pressure": "SBP",
+    "Type 2 Diabetes": "T2D",
+    "Asthma": "Asthma",
+    "Log triglycerides": "Log(TG)",
+    "Log HDL Cholesterol": "Log(HDL-C)",
+    "LDL Cholesterol": "LDL-C",
+    "Total Cholesterol": "TC",
+    "LDL Cholesterol (Adj.)": "LDL-C",
+    "Total Cholesterol (Adj.)": "TC",
+    "Diastolic blood pressure (Adj.)": "DBP",
+    "Systolic blood pressure (Adj.)": "SBP",
+}
+
+
+def shorten_phenotype_label(label):
+    return PHENOTYPE_LABEL_MAP.get(label, label.replace(" (Adj.)", ""))
+
+
 def plot_age_and_sex_stratified_mixing_weights(
     moe_model_name,
     analysis_id,
     biobank="ukbb",
     stratified_model="EUR",
+    figsize=(5, 5),
+    fold="fold_1",
 ):
     dataset = PRSDataset.from_pickle(
-        f"data/harmonized_data/{analysis_id}/{biobank}/test_data.pkl"
+        f"data/harmonized_data/{analysis_id}/{biobank}/full_data.pkl"
     )
 
     # Keep only European samples:
     dataset.filter_samples(dataset.data["Ancestry"] == "EUR")
 
     moe_model = MoEPRS.from_saved_model(
-        f"data/trained_models/{analysis_id}/{biobank}/train_data/{moe_model_name}.pkl"
+        f"data/trained_models/{analysis_id}/{biobank}/"
+        f"{fold}/train_data/{moe_model_name}.pkl"
     )
 
     # Extract weight and sex data for the individuals:
@@ -68,7 +100,7 @@ def plot_age_and_sex_stratified_mixing_weights(
     ]
     weights_df[prs_col_names] = moe_model.predict_proba(dataset)
 
-    plt.figure(figsize=(5, 5))
+    fig, ax = plt.subplots(figsize=figsize)
     sns.scatterplot(
         data=weights_df,
         x="Age",
@@ -76,16 +108,23 @@ def plot_age_and_sex_stratified_mixing_weights(
         hue="Sex",
         palette={"Male": "#A1BE95", "Female": "#F98866"},
         alpha=0.7,
+        ax=ax,
     )
-    plt.xlabel("Age at recruitment")
-    plt.ylabel(f"Mixing weight for {stratified_model} PRS")
-    plt.title(
-        f"Mixing weights for {stratified_model} PRS for {ANALYSIS_TO_PHENOTYPE_MAP[analysis_id]}\nin samples of "
+    ax.set_xlabel("Age at recruitment")
+    ax.set_ylabel(f"Mixing weight for {stratified_model} PRS")
+    ax.set_title(
+        f"Mixing weights for {stratified_model} PRS\n"
+        f"{ANALYSIS_TO_PHENOTYPE_MAP[analysis_id]} in samples of "
         f"European ancestry ({BIOBANK_NAME_MAP_SHORT[biobank]})"
     )
-    plt.tight_layout()
-    plt.savefig(f"figures/section_3/weights_{analysis_id}_{biobank}.png", dpi=300)
-    plt.close()
+    fig.tight_layout(pad=0.6)
+    fig.savefig(
+        f"figures/section_3/mixing_weights_by_age_sex_{analysis_id}_{biobank}.png",
+        dpi=300,
+        bbox_inches="tight",
+        pad_inches=0.08,
+    )
+    plt.close(fig)
 
 
 def generate_stratified_metrics_figures(
@@ -93,6 +132,8 @@ def generate_stratified_metrics_figures(
     biobank="ukbb",
     keep_ancestry=("EUR",),
     category=("SexG", "AgeGroup3"),
+    metric="Incremental_R2",
+    figsize=(5, 5),
 ):
     # -----------------------------------------------------------------
     metrics_df = estimate_stratified_evaluation_metrics(
@@ -100,42 +141,54 @@ def generate_stratified_metrics_figures(
         biobank=biobank,
         keep_ancestry=keep_ancestry,
         category=category,
+        metric=metric,
     )
     metrics_df = metrics_df.loc[metrics_df["PGS"].isin(keep_ancestry)]
     metrics_df = metrics_df.loc[metrics_df["EvalGroup"] != "All"]
     metrics_df.rename(columns={"PGS": "Stratified PRS"}, inplace=True)
     metrics_df = metrics_df.reset_index(drop=True)
 
-    plt.figure(figsize=(5, 5))
+    fig, ax = plt.subplots(figsize=figsize)
     g = sns.barplot(
-        metrics_df,
+        data=metrics_df,
         x="EvalGroup",
-        y="Incremental_R2",
+        y=metric,
         hue="Stratified PRS",
         palette=assign_models_consistent_colors(metrics_df["Stratified PRS"].unique()),
         order=["Female", "Male", "Age<50", "Age 50–60", "Age>60"],
+        ax=ax,
     )
 
-    add_error_bars(g, metrics_df, x="EvalGroup", y="Incremental_R2", hue_order=["EUR"])
+    add_error_bars(g, metrics_df, x="EvalGroup", y=metric, hue_order=["EUR"])
 
-    plt.title(
+    ax.set_title(
         f"Prediction accuracy on {ANALYSIS_TO_PHENOTYPE_MAP[analysis_id]}\nin samples of European ancestry ({BIOBANK_NAME_MAP_SHORT[biobank]})"
     )
 
-    plt.xlabel("Evaluation Group")
-    plt.ylabel("Incremental $R^2$")
+    ax.set_xlabel("Evaluation Group")
+    ax.set_ylabel(METRIC_NAME_MAP.get(metric, metric))
 
-    plt.tight_layout()
-    plt.savefig(f"figures/section_3/stratified_accuracy_{analysis_id}_{biobank}.pdf")
+    fig.tight_layout(pad=0.4)
+    plt.savefig(
+        f"figures/section_3/accuracy_stratified_{analysis_id}_{biobank}.pdf",
+        bbox_inches="tight",
+        pad_inches=0.04,
+    )
     plt.close()
 
 
-def plot_medication_use_figures(analysis_id, biobank="ukbb"):
+def plot_medication_use_figures(
+    analysis_id,
+    biobank="ukbb",
+    metric="Incremental_R2",
+    figsize=(5, 5),
+):
     metrics_df = estimate_stratified_evaluation_metrics(
         analysis_id,
         biobank=biobank,
         keep_ancestry=["EUR"],
         category=["SexG", "AgeGroup3"],
+        metric=metric,
     )
     metrics_df = metrics_df.loc[metrics_df["PGS"] == "EUR"]
     metrics_df = metrics_df.loc[metrics_df["EvalGroup"] != "All"]
@@ -171,23 +224,23 @@ def plot_medication_use_figures(analysis_id, biobank="ukbb"):
 
     # -------------------------------------------
 
-    fig, ax1 = plt.subplots(figsize=(5, 5))
+    fig, ax1 = plt.subplots(figsize=figsize)
     width = 0.4
 
     x = np.arange(len(ordered_cats))
-    y1 = metrics_df["Incremental_R2"].values
+    y1 = metrics_df[metric].values
     y2 = med_prev["Proportion_Using_Medication"].values
 
     eur_color = assign_models_consistent_colors(["EUR"])["EUR"]
     bars1 = ax1.bar(x - width / 2, y1, width=width, color=eur_color, label="Quantity 1")
-    ax1.set_ylabel("Incremental $R^2$", color="#3C6B64")
+    ax1.set_ylabel(METRIC_NAME_MAP.get(metric, metric), color="#3C6B64")
     ax1.tick_params(axis="y", labelcolor="#3C6B64")
 
     # Add the appropriate tick positions to shift the error bars:
     ax1.set_xticks(x - width / 2)
     ax1.set_xticklabels(ordered_cats)
 
-    add_error_bars(ax1, metrics_df, x="EvalGroup", y="Incremental_R2")
+    add_error_bars(ax1, metrics_df, x="EvalGroup", y=metric)
 
     ax2 = ax1.twinx()
     bars2 = ax2.bar(
@@ -219,12 +272,107 @@ def plot_medication_use_figures(analysis_id, biobank="ukbb"):
         f"in samples of European ancestry ({BIOBANK_NAME_MAP_SHORT[biobank]})"
     )
 
-    plt.tight_layout()
+    fig.tight_layout(pad=0.4)
 
     plt.savefig(
-        f"figures/section_3/medication_use_accuracy_{analysis_id}_{biobank}.pdf"
+        f"figures/section_3/accuracy_medication_use_{analysis_id}_{biobank}.pdf",
+        bbox_inches="tight",
+        pad_inches=0.04,
     )
     plt.close()
+
+
+def _fold_sort_key(fold):
+    try:
+        return (0, int(str(fold).removeprefix("fold_")))
+    except ValueError:
+        return (1, str(fold))
+
+
+def _available_moe_folds(moe_model_name, biobank, ref_analysis):
+    model_paths = glob.glob(
+        f"data/trained_models/{ref_analysis}/{biobank}/fold_*/train_data/"
+        f"{moe_model_name}.pkl"
+    )
+    return sorted(
+        {
+            osp.basename(osp.dirname(osp.dirname(model_path)))
+            for model_path in model_paths
+        },
+        key=_fold_sort_key,
+    )
+
+
+@lru_cache(maxsize=32)
+def _get_ref_moe_probability_tables(
+    moe_model_name,
+    biobank,
+    ref_analysis,
+    fold="fold_1",
+):
+    """
+    Predict all available MoE mixing weights on the same reference dataset once.
+
+    The section 3 concordance/similarity figures repeatedly compare the same
+    model predictions on the same reference samples. Caching this avoids
+    re-loading every model and re-running predict_proba for every pair.
+    """
+
+    ref_dataset = PRSDataset.from_pickle(
+        f"data/harmonized_data/{ref_analysis}/{biobank}/full_data.pkl"
+    )
+    ancestry_proba = ref_dataset.data[ANCESTRY_PROBA_COLS].copy()
+    ancestry = ref_dataset.data["Ancestry"].values.copy()
+
+    model_entries = []
+    for analysis_id, table_id in ANALYSIS_TO_TABLE_MAP.items():
+        if table_id != "multi_ancestry_prs_table":
+            continue
+
+        model_f = (
+            f"data/trained_models/{analysis_id}/{biobank}/{fold}/train_data/"
+            f"{moe_model_name}.pkl"
+        )
+        if not osp.exists(model_f):
+            continue
+
+        moe_model = MoEPRS.from_saved_model(model_f)
+
+        # For compatibility, update the scaler to only keep the gating model input features.
+        moe_model.data_scaler = subset_standard_scaler(
+            moe_model.data_scaler,
+            [c for c in moe_model.gate_input_cols if c != "Sex"],
+        )
+
+        model_entries.append(
+            {
+                "analysis_id": analysis_id,
+                "phenotype": ANALYSIS_TO_PHENOTYPE_MAP[analysis_id],
+                "proba": pd.DataFrame(
+                    moe_model.predict_proba(ref_dataset),
+                    columns=[
+                        MODEL_NAME_MAP.get(analysis_id, {}).get(c, c)
+                        for c in moe_model.expert_cols
+                    ],
+                ),
+            }
+        )
+
+    return ancestry_proba, ancestry, tuple(model_entries)
+
+
+def _normalized_shared_arrays(left_proba, right_proba):
+    shared_cols = sorted(set(left_proba.columns).intersection(right_proba.columns))
+    if len(shared_cols) == 0:
+        return None, None
+
+    left_arr = left_proba[shared_cols].to_numpy(dtype=float, copy=True)
+    right_arr = right_proba[shared_cols].to_numpy(dtype=float, copy=True)
+
+    left_arr /= np.clip(left_arr.sum(axis=1).reshape(-1, 1), 1e-6, None)
+    right_arr /= np.clip(right_arr.sum(axis=1).reshape(-1, 1), 1e-6, None)
+
+    return left_arr, right_arr
 
 
 def extract_mixing_weight_similarity_across_analyses(
@@ -232,83 +380,42 @@ def extract_mixing_weight_similarity_across_analyses(
     biobank,
     ref_analysis="HEIGHT_MA",
     metric="cosine",  # "cosine" or "jsd"
+    fold="fold_1",
 ):
-    unique_analysis = []
-    for analysis_id, table_id in ANALYSIS_TO_TABLE_MAP.items():
-        if table_id != "multi_ancestry_prs_table":
-            continue
-        model_f = f"data/trained_models/{analysis_id}/{biobank}/train_data/{moe_model_name}.pkl"
-        if osp.exists(model_f):
-            unique_analysis.append(model_f)
-
-    unique_analysis.append("Ancestry classifier")
-
-    ref_dataset = PRSDataset.from_pickle(
-        f"data/harmonized_data/{ref_analysis}/{biobank}/full_data.pkl"
+    ancestry_proba, ancestry, model_entries = _get_ref_moe_probability_tables(
+        moe_model_name, biobank, ref_analysis, fold
     )
+    entries = list(model_entries) + [
+        {
+            "analysis_id": None,
+            "phenotype": "Ancestry classifier",
+            "proba": ancestry_proba,
+        }
+    ]
 
     sim_result = []
 
-    for models in combinations(unique_analysis, 2):
-        proba = []
-        phenotypes = []
-
-        # Load the probability predictions from the models:
-        for m in models:
-            if m == "Ancestry classifier":
-                proba.append(
-                    ref_dataset.data[["AFR", "AMR", "CSA", "EAS", "EUR", "MID"]].copy()
-                )
-
-                phenotypes.append("Ancestry classifier")
-
-            else:
-                moe_model = MoEPRS.from_saved_model(m)
-
-                # For compatability, update the scaler to only keep the gating model input features:
-                moe_model.data_scaler = subset_standard_scaler(
-                    moe_model.data_scaler,
-                    [c for c in moe_model.gate_input_cols if c != "Sex"],
-                )
-
-                analysis_id = m.split("/")[2]
-                phenotypes.append(ANALYSIS_TO_PHENOTYPE_MAP[analysis_id])
-
-                proba.append(
-                    pd.DataFrame(
-                        moe_model.predict_proba(ref_dataset),
-                        columns=[
-                            MODEL_NAME_MAP[analysis_id][c]
-                            for c in moe_model.expert_cols
-                        ],
-                    )
-                )
-
-        # Keep shared columns across the two models:
-        shared_cols = list(
-            set(list(proba[0].columns)).intersection(set(list(proba[1].columns)))
-        )
-
-        for i in range(len(proba)):
-            proba[i] = proba[i][shared_cols].values
-            proba[i] /= np.clip(proba[i].sum(axis=1).reshape(-1, 1), 1e-6, None)
+    for left, right in combinations(entries, 2):
+        left_arr, right_arr = _normalized_shared_arrays(left["proba"], right["proba"])
+        if left_arr is None:
+            continue
 
         masks = {
-            "All": np.arange(proba[0].shape[0]),
-            "Non-European ancestry": ref_dataset.data["Ancestry"].values != "EUR",
-            "Unassigned ancestry (OTH)": ref_dataset.data["Ancestry"].values == "OTH",
+            "All": np.arange(left_arr.shape[0]),
+            "Non-European ancestry": ancestry != "EUR",
+            "Unassigned ancestry (OTH)": ancestry == "OTH",
         }
 
         for msk, msk_val in masks.items():
             # Compute similarity:
             if metric == "cosine":
                 similarity = rowwise_cosine_similarity(
-                    proba[0][msk_val, :], proba[1][msk_val, :]
+                    left_arr[msk_val, :], right_arr[msk_val, :]
                 )
             elif metric == "jsd":
                 # jensenshannon returns Jensen-Shannon distance, so convert to similarity
                 similarity = 1.0 - jensenshannon(
-                    proba[0][msk_val, :], proba[1][msk_val, :], axis=1, base=2
+                    left_arr[msk_val, :], right_arr[msk_val, :], axis=1, base=2
                 )
             else:
                 raise ValueError("metric must be either 'cosine' or 'jsd'")
@@ -317,12 +424,317 @@ def extract_mixing_weight_similarity_across_analyses(
                 {
                     "Similarity": np.mean(similarity),
                     "Cohort": msk,
-                    "Phenotype 1": phenotypes[0],
-                    "Phenotype 2": phenotypes[1],
+                    "Phenotype 1": left["phenotype"],
+                    "Phenotype 2": right["phenotype"],
                 }
             )
 
-    return pd.DataFrame(sim_result)
+    return pd.DataFrame(
+        sim_result,
+        columns=["Similarity", "Cohort", "Phenotype 1", "Phenotype 2"],
+    )
+
+
+def extract_ancestry_classifier_concordance(
+    moe_model_name,
+    biobank,
+    fold=None,
+):
+    """Compare each phenotype's fold models with ancestry on its own dataset."""
+    sim_result = []
+
+    for analysis_id, table_id in ANALYSIS_TO_TABLE_MAP.items():
+        if table_id != "multi_ancestry_prs_table":
+            continue
+
+        dataset_f = (
+            f"data/harmonized_data/{analysis_id}/{biobank}/full_data.pkl"
+        )
+        if not osp.exists(dataset_f):
+            continue
+
+        model_paths = glob.glob(
+            f"data/trained_models/{analysis_id}/{biobank}/fold_*/train_data/"
+            f"{moe_model_name}.pkl"
+        )
+        if fold is not None:
+            model_paths = [
+                model_path
+                for model_path in model_paths
+                if osp.basename(osp.dirname(osp.dirname(model_path))) == fold
+            ]
+        model_paths = sorted(
+            model_paths,
+            key=lambda path: _fold_sort_key(
+                osp.basename(osp.dirname(osp.dirname(path)))
+            ),
+        )
+        if len(model_paths) == 0:
+            continue
+
+        phenotype_dataset = PRSDataset.from_pickle(dataset_f)
+        ancestry_proba = phenotype_dataset.data[ANCESTRY_PROBA_COLS].copy()
+        ancestry = phenotype_dataset.data["Ancestry"].values.copy()
+        masks = {
+            "All": np.arange(len(ancestry)),
+            "European": ancestry == "EUR",
+            "Non-European": ancestry != "EUR",
+        }
+
+        for model_f in model_paths:
+            model_fold = osp.basename(osp.dirname(osp.dirname(model_f)))
+            moe_model = MoEPRS.from_saved_model(model_f)
+            moe_model.data_scaler = subset_standard_scaler(
+                moe_model.data_scaler,
+                [c for c in moe_model.gate_input_cols if c != "Sex"],
+            )
+            model_proba = pd.DataFrame(
+                moe_model.predict_proba(phenotype_dataset),
+                columns=[
+                    MODEL_NAME_MAP.get(analysis_id, {}).get(c, c)
+                    for c in moe_model.expert_cols
+                ],
+            )
+            model_arr, classifier_arr = _normalized_shared_arrays(
+                model_proba, ancestry_proba
+            )
+            if model_arr is None:
+                continue
+
+            for cohort, msk in masks.items():
+                similarity = rowwise_cosine_similarity(
+                    model_arr[msk, :], classifier_arr[msk, :]
+                )
+                sim_result.append(
+                    {
+                        "analysis_id": analysis_id,
+                        "Phenotype": ANALYSIS_TO_PHENOTYPE_MAP[analysis_id],
+                        "Cohort": cohort,
+                        "Similarity": np.mean(similarity),
+                        "Biobank": BIOBANK_NAME_MAP_SHORT[biobank],
+                        "Fold": model_fold,
+                    }
+                )
+
+    return pd.DataFrame(
+        sim_result,
+        columns=[
+            "analysis_id",
+            "Phenotype",
+            "Cohort",
+            "Similarity",
+            "Biobank",
+            "Fold",
+        ],
+    )
+
+
+def plot_ancestry_classifier_concordance(
+    sim_df,
+    output_path,
+    phenotype_order,
+    title=None,
+):
+    if len(sim_df) == 0:
+        print(f"> Skipping ancestry classifier concordance plot: no data for {output_path}")
+        return
+
+    cohort_order = ["All", "European", "Non-European"]
+    cohort_palette = {
+        "All": "#9FBAD6",
+        "European": "#5F7FA6",
+        "Non-European": "#CD9395",
+    }
+    phenotype_order = [
+        p for p in phenotype_order if p in set(sim_df["Phenotype"].dropna().unique())
+    ]
+    plot_df = sim_df.copy()
+    plot_df["Phenotype Label"] = plot_df["Phenotype"].map(shorten_phenotype_label)
+    phenotype_label_order = [shorten_phenotype_label(p) for p in phenotype_order]
+
+    with sns.plotting_context("paper", font_scale=SECTION3_FONT_SCALE):
+        fig, ax = plt.subplots(figsize=CONCORDANCE_FIGSIZE)
+
+        sns.pointplot(
+            data=plot_df,
+            x="Phenotype Label",
+            y="Similarity",
+            hue="Cohort",
+            order=phenotype_label_order,
+            hue_order=cohort_order,
+            palette=cohort_palette,
+            dodge=0.35,
+            markers="o",
+            linestyles="",
+            errorbar="se",
+            capsize=0,
+            ax=ax,
+        )
+
+        ax.set_ylabel("Mean cosine similarity")
+        ax.set_xlabel("")
+        ax.set_ylim(0.0, 1.03)
+        ax.set_yticks(np.linspace(0.0, 1.0, 5))
+        ax.tick_params(axis="x", labelrotation=30)
+        for label in ax.get_xticklabels():
+            label.set_ha("right")
+        ax.legend(
+            title="Test cohort",
+            bbox_to_anchor=(1.02, 0.5),
+            loc="center left",
+            borderaxespad=0,
+            fontsize="x-small",
+            title_fontsize="x-small",
+        )
+
+        if title is not None:
+            ax.set_title(title, pad=14)
+
+        fig.subplots_adjust(left=0.13, right=0.78, bottom=0.24, top=0.80)
+        fig.savefig(output_path, bbox_inches="tight")
+        plt.close(fig)
+
+
+def plot_medication_adjusted_ancestry_classifier_concordance(
+    sim_df,
+    adj_analysis_ids,
+    output_path,
+    title=None,
+):
+    if len(sim_df) == 0 or "analysis_id" not in sim_df.columns:
+        print(
+            "> Skipping medication-adjusted ancestry classifier concordance plot: "
+            f"no data for {output_path}"
+        )
+        return
+
+    plot_dfs = []
+    phenotype_order = []
+
+    for adj_analysis_id in adj_analysis_ids:
+        base_analysis_id = adj_analysis_id.replace("ADJ_", "")
+        base_label = ANALYSIS_TO_PHENOTYPE_MAP.get(base_analysis_id, base_analysis_id)
+        phenotype_order.append(base_label)
+
+        for analysis_id, adjustment in (
+            (base_analysis_id, "Unadjusted"),
+            (adj_analysis_id, "Medication-adjusted"),
+        ):
+            df = sim_df.loc[sim_df["analysis_id"] == analysis_id].copy()
+            if len(df) == 0:
+                continue
+            df["Phenotype"] = base_label
+            df["Adjustment"] = adjustment
+            plot_dfs.append(df)
+
+    if len(plot_dfs) == 0:
+        print(
+            f"> Skipping medication-adjusted ancestry classifier concordance plot: "
+            f"no data for {output_path}"
+        )
+        return
+
+    plot_df = pd.concat(plot_dfs, ignore_index=True)
+    cohort_order = ["All", "European", "Non-European"]
+    adjustment_order = ["Unadjusted", "Medication-adjusted"]
+    cohort_palette = {
+        "All": "#9FBAD6",
+        "European": "#5F7FA6",
+        "Non-European": "#CD9395",
+    }
+    adjustment_marker = {
+        "Unadjusted": "o",
+        "Medication-adjusted": "X",
+    }
+    phenotype_order = [
+        p for p in phenotype_order if p in set(plot_df["Phenotype"].dropna().unique())
+    ]
+    phenotype_label_order = [shorten_phenotype_label(p) for p in phenotype_order]
+    plot_df["Phenotype Label"] = plot_df["Phenotype"].map(shorten_phenotype_label)
+    x_pos = {p: i for i, p in enumerate(phenotype_order)}
+    cohort_offset = {
+        cohort: offset
+        for cohort, offset in zip(cohort_order, np.linspace(-0.24, 0.24, 3))
+    }
+    adjustment_offset = {
+        adjustment: offset
+        for adjustment, offset in zip(adjustment_order, (-0.055, 0.055))
+    }
+    plot_df["PlotX"] = plot_df.apply(
+        lambda r: x_pos[r["Phenotype"]]
+        + cohort_offset[r["Cohort"]]
+        + adjustment_offset[r["Adjustment"]],
+        axis=1,
+    )
+    plot_df = (
+        plot_df.groupby(
+            ["analysis_id", "Phenotype", "Cohort", "Adjustment", "PlotX"],
+            as_index=False,
+            observed=True,
+        )
+        .agg(
+            Similarity=("Similarity", "mean"),
+            Similarity_SE=("Similarity", "sem"),
+        )
+    )
+
+    with sns.plotting_context("paper", font_scale=SECTION3_FONT_SCALE):
+        fig, ax = plt.subplots(figsize=CONCORDANCE_FIGSIZE)
+
+        sns.scatterplot(
+            data=plot_df,
+            x="PlotX",
+            y="Similarity",
+            hue="Cohort",
+            style="Adjustment",
+            hue_order=cohort_order,
+            style_order=adjustment_order,
+            palette=cohort_palette,
+            markers=adjustment_marker,
+            s=80,
+            linewidth=1.6,
+            alpha=0.95,
+            ax=ax,
+        )
+        for cohort, cohort_df in plot_df.groupby("Cohort", observed=True):
+            cohort_df = cohort_df.loc[cohort_df["Similarity_SE"].notna()]
+            if cohort_df.empty:
+                continue
+            ax.errorbar(
+                cohort_df["PlotX"],
+                cohort_df["Similarity"],
+                yerr=cohort_df["Similarity_SE"],
+                fmt="none",
+                ecolor=cohort_palette[cohort],
+                elinewidth=1.0,
+                capsize=0,
+                zorder=2,
+            )
+
+        ax.set_ylabel("Mean cosine similarity")
+        ax.set_xlabel("")
+        ax.set_ylim(0.0, 1.03)
+        ax.set_yticks(np.linspace(0.0, 1.0, 5))
+        ax.set_xticks(range(len(phenotype_order)))
+        ax.set_xticklabels(phenotype_label_order)
+        ax.tick_params(axis="x", labelrotation=30)
+        for label in ax.get_xticklabels():
+            label.set_ha("right")
+        ax.legend(
+            bbox_to_anchor=(1.02, 0.5),
+            loc="center left",
+            borderaxespad=0,
+            fontsize="x-small",
+            title_fontsize="x-small",
+        )
+
+        if title is not None:
+            ax.set_title(title, pad=24)
+
+        fig.subplots_adjust(left=0.13, right=0.74, bottom=0.24, top=0.70)
+
+        fig.savefig(output_path, bbox_inches="tight")
+        plt.close(fig)
 
 
 def plot_triangular_similarity_matrix(
@@ -464,9 +876,20 @@ if __name__ == "__main__":
         help="The similarity metric for the mixing weights.",
     )
 
+    parser.add_argument(
+        "--mixing-weight-fold",
+        dest="mixing_weight_fold",
+        type=str,
+        default="fold_1",
+        help=(
+            "Fold-trained model used for descriptive mixing-weight plots "
+            "(default: fold_1). Concordance plots use every available fold."
+        ),
+    )
+
     args = parser.parse_args()
 
-    sns.set_context("paper", font_scale=1.25)
+    sns.set_context("paper", font_scale=SECTION3_FONT_SCALE)
     makedir("figures/section_3/")
 
     # ----------------------------------------------------------
@@ -485,34 +908,77 @@ if __name__ == "__main__":
     ]
 
     adj_pheno_analyses = ["LDL_ADJ_MA", "TC_ADJ_MA", "DBP_ADJ_MA", "SBP_ADJ_MA"]
+    phenotype_order_adj = [ANALYSIS_TO_PHENOTYPE_MAP[p] for p in adj_pheno_analyses]
+    phenotype_order_all = phenotype_order + phenotype_order_adj
 
     metric_names = {"cosine": "Cosine similarity", "jsd": "Jensen-Shannon similarity"}
 
     figure_width = 15
 
     # ----------------------------------------------------------
+    print(">>> Section 3 Figures <<<")
+
+    plot_similarity_matrices = False
 
     # Extract and plot the similarity matrix across phenotypes:
     for biobank in ("ukbb", "cartagene"):
-        sim_data = extract_mixing_weight_similarity_across_analyses(
+        if plot_similarity_matrices:
+            concordance_folds = _available_moe_folds(
+                args.moe_model,
+                biobank,
+                ref_analysis="HEIGHT_MA",
+            )
+            if len(concordance_folds) == 0:
+                concordance_folds = [args.mixing_weight_fold]
+            sim_data = pd.concat(
+                [
+                    extract_mixing_weight_similarity_across_analyses(
+                        args.moe_model,
+                        biobank,
+                        ref_analysis="HEIGHT_MA",
+                        metric=args.sim_metric,
+                        fold=fold,
+                    ).assign(Fold=fold)
+                    for fold in concordance_folds
+                ],
+                ignore_index=True,
+            )
+
+        ancestry_classifier_sim = extract_ancestry_classifier_concordance(
             args.moe_model,
             biobank,
-            ref_analysis="HEIGHT_MA",
-            metric=args.sim_metric,
+        )
+        plot_ancestry_classifier_concordance(
+            ancestry_classifier_sim,
+            f"figures/section_3/ancestry_classifier_concordance_all_{biobank}.pdf",
+            phenotype_order,
+            title=(
+                "Concordance between ancestry classifier and\n"
+                f"MoEPRS mixing weights on {BIOBANK_NAME_MAP_SHORT[biobank]} samples"
+            ),
+        )
+        plot_medication_adjusted_ancestry_classifier_concordance(
+            ancestry_classifier_sim,
+            adj_pheno_analyses,
+            f"figures/section_3/ancestry_classifier_concordance_med_adj_phenotypes_{biobank}.pdf",
+            title=(
+                "Concordance between ancestry classifier and MoEPRS\nmixing weights for "
+                f"medication-adjusted phenotypes ({BIOBANK_NAME_MAP_SHORT[biobank]} samples)"
+            ),
         )
 
+        """
         for cohort in sim_data["Cohort"].unique():
             plot_triangular_similarity_matrix(
                 sim_data.loc[sim_data["Cohort"] == cohort].copy(),
-                f"figures/section_3/similarity_matrix_{biobank}_{args.sim_metric}_{cohort}.pdf",
-                phenotype_order + ["Ancestry classifier"],
+                f"figures/section_3/similarity_matrix_{args.sim_metric}_{cohort}_all_{biobank}.pdf",
+                [shorten_phenotype_label(p) for p in phenotype_order]
+                + ["Ancestry classifier"],
                 title=f"Mixing weight similarity for ancestry-stratified PRS\nacrosss {len(phenotype_order)} phenotypes in {BIOBANK_NAME_MAP_SHORT[biobank]}\n{cohort} samples",
                 metric_name=f"Mean {metric_names[args.sim_metric]}",
                 figsize=(figure_width // 2, figure_width // 2),
             )
-
         # ------------------------------------------------------------------------------------
-        phenotype_order_adj = [ANALYSIS_TO_PHENOTYPE_MAP[p] for p in adj_pheno_analyses]
 
         sim_data_adj = sim_data.loc[
             sim_data["Phenotype 1"].isin(phenotype_order_adj + ["Ancestry classifier"])
@@ -544,8 +1010,9 @@ if __name__ == "__main__":
             )
             plot_triangular_similarity_matrix(
                 sim_data_adj.loc[sim_data_adj["Cohort"] == cohort].copy(),
-                f"figures/section_3/similarity_matrix_{biobank}_{args.sim_metric}_{cohort}_ADJ_phenotypes.pdf",
-                phenotype_order_adj_mod + ["Ancestry classifier"],
+                f"figures/section_3/similarity_matrix_{args.sim_metric}_{cohort}_adj_phenotypes_{biobank}.pdf",
+                [shorten_phenotype_label(p) for p in phenotype_order_adj_mod]
+                + ["Ancestry classifier"],
                 title=title,
                 metric_name=f"Mean {metric_names[args.sim_metric]}",
                 figsize=(figure_width // 3, figure_width // 3),
@@ -555,18 +1022,17 @@ if __name__ == "__main__":
 
         # ------------------------------------------------------------------------------------
 
-        phenotype_order_all = phenotype_order + phenotype_order_adj
-
         for cohort in sim_data["Cohort"].unique():
             plot_triangular_similarity_matrix(
                 sim_data.loc[sim_data["Cohort"] == cohort].copy(),
-                f"figures/section_3/similarity_matrix_{biobank}_{args.sim_metric}_{cohort}_all_phenotypes.pdf",
-                phenotype_order_all + ["Ancestry classifier"],
+                f"figures/section_3/similarity_matrix_{args.sim_metric}_{cohort}_all_phenotypes_{biobank}.pdf",
+                [shorten_phenotype_label(p) for p in phenotype_order_all]
+                + ["Ancestry classifier"],
                 title=f"Mixing weight similarity for ancestry-stratified PRS\nacrosss {len(phenotype_order_all)} phenotypes in {BIOBANK_NAME_MAP_SHORT[biobank]}\n{cohort} samples",
                 metric_name=f"Mean {metric_names[args.sim_metric]}",
                 figsize=(figure_width // 2, figure_width // 2),
             )
-
+    """
     # ----------------------------------------------------------
     # Plot mixture graphs for the medication-adjusted phenotypes:
 
@@ -574,8 +1040,11 @@ if __name__ == "__main__":
 
     for analysis_id in adj_pheno_analyses:
         for biobank in ("ukbb", "cartagene"):
-            data_path = f"data/harmonized_data/{analysis_id}/{biobank}/test_data.pkl"
-            model_path = f"data/trained_models/{analysis_id}/{biobank}/train_data/{args.moe_model}.pkl"
+            data_path = f"data/harmonized_data/{analysis_id}/{biobank}/full_data.pkl"
+            model_path = (
+                f"data/trained_models/{analysis_id}/{biobank}/"
+                f"{args.mixing_weight_fold}/train_data/{args.moe_model}.pkl"
+            )
 
             p_dataset = PRSDataset.from_pickle(data_path)
             moe_model = MoEPRS.from_saved_model(model_path)
@@ -599,8 +1068,8 @@ if __name__ == "__main__":
         "MoEPRS (CaG)",
         "MultiPRS (UKB)",
         "MultiPRS (CaG)",
-        "Best Single Source PRS",
         "Ancestry-weighted PRS",
+        "Best Single Source PRS",
     ]
 
     palette = {
@@ -618,6 +1087,8 @@ if __name__ == "__main__":
             args.moe_model,
             biobank,
             keep_analyses=["LDL_ADJ_MA", "TC_ADJ_MA", "DBP_ADJ_MA", "SBP_ADJ_MA"],
+            metric_kind="incremental_vs_ref",
+            ref_model_biobank="test_biobank",
             add_training_biobank_to_model_name=True,
         )
 
@@ -628,46 +1099,78 @@ if __name__ == "__main__":
             )
             + f" ancestry in {BIOBANK_NAME_MAP_SHORT[biobank]}"
         )
+        metrics_df["Phenotype"] = metrics_df["Phenotype"].map(shorten_phenotype_label)
+        plot_phenotype_order_adj = [
+            shorten_phenotype_label(p) for p in phenotype_order_adj
+        ]
 
-        g = plot_combined_accuracy_metrics(
-            metrics_df,
-            output_f=f"figures/section_3/accuracy_metrics_med_adj_{biobank}.pdf",
-            x="Phenotype",
-            palette=palette,
-            order=phenotype_order_adj,
-            hue_order=hue_order,
-            column=None,
-            row="Evaluation Group",
-            height=3,
-            aspect=4,
-            sharey=True,
-            test_models=[
-                (f"MoEPRS ({bb_short})", f"MultiPRS ({bb_short})"),
-                (f"MoEPRS ({bb_short})", "Best Single Source PRS"),
-            ],
-            significance_symbols=["*", "+"],
-            x_tick_rotation=90,
-        )
+        with sns.plotting_context("paper", font_scale=SECTION3_FONT_SCALE):
+            g = plot_combined_accuracy_metrics(
+                metrics_df,
+                output_f=f"figures/section_3/accuracy_metrics_med_adj_all_{biobank}.pdf",
+                x="Phenotype",
+                palette=palette,
+                order=plot_phenotype_order_adj,
+                hue_order=hue_order,
+                column=None,
+                row="Evaluation Group",
+                height=SECTION3_HALF_PANEL_FIGSIZE[1] / 2,
+                aspect=SECTION3_HALF_PANEL_FIGSIZE[0]
+                / (SECTION3_HALF_PANEL_FIGSIZE[1] / 2),
+                sharey=True,
+                test_models=[
+                    (f"MoEPRS ({bb_short})", f"MultiPRS ({bb_short})"),
+                    (f"MoEPRS ({bb_short})", "Best Single Source PRS"),
+                    (f"MoEPRS ({bb_short})", "Ancestry-weighted PRS"),
+                ],
+                significance_symbols=["*", "+", "°"],
+                x_tick_rotation=30,
+                legend_title="Model Name\n(Training biobank)",
+                legend_fontsize="medium",
+                legend_title_fontsize="medium",
+            )
 
     # ----------------------------------------------------------
     #
-    sns.set_context("paper", font_scale=1.25)
+    sns.set_context("paper", font_scale=SECTION3_FONT_SCALE)
 
     # Generate figures with stratified metrics:
     for adj_pheno in adj_pheno_analyses:
         for biobank in ("ukbb", "cartagene"):
             # plots for unadjusted phenotypes:
             generate_stratified_metrics_figures(
-                adj_pheno.replace("ADJ_", ""), biobank=biobank
+                adj_pheno.replace("ADJ_", ""),
+                biobank=biobank,
+                metric="Incremental_R2",
+                figsize=SECTION3_QUARTER_PANEL_FIGSIZE,
             )
-            plot_medication_use_figures(adj_pheno.replace("ADJ_", ""), biobank=biobank)
+            plot_medication_use_figures(
+                adj_pheno.replace("ADJ_", ""),
+                biobank=biobank,
+                metric="Incremental_R2",
+                figsize=SECTION3_QUARTER_PANEL_FIGSIZE,
+            )
 
             # plots for unadjusted phenotypes:
-            generate_stratified_metrics_figures(adj_pheno, biobank=biobank)
+            generate_stratified_metrics_figures(
+                adj_pheno,
+                biobank=biobank,
+                metric="Incremental_R2",
+                figsize=SECTION3_QUARTER_PANEL_FIGSIZE,
+            )
 
             # Plot the gating model weights:
             plot_age_and_sex_stratified_mixing_weights(
                 args.moe_model,
                 adj_pheno,
                 biobank=biobank,
+                figsize=SECTION3_QUARTER_PANEL_FIGSIZE,
+                fold=args.mixing_weight_fold,
+            )
+            plot_age_and_sex_stratified_mixing_weights(
+                args.moe_model,
+                adj_pheno.replace("ADJ_", ""),
+                biobank=biobank,
+                figsize=SECTION3_QUARTER_PANEL_FIGSIZE,
+                fold=args.mixing_weight_fold,
             )

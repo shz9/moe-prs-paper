@@ -14,6 +14,7 @@ from gate_interpretation import gate_parameters_heatmap
 from moe import MoEPRS
 from plot_utils import ANALYSIS_TO_PHENOTYPE_MAP, BIOBANK_NAME_MAP_SHORT
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Plot gate parameters for a trained MoE model."
@@ -40,7 +41,7 @@ if __name__ == "__main__":
 
         title = f"Learned gate parameters for {phenotype} ({biobank})"
         output_f = (
-            f"figures/gate_parameters/{args.moe_model}/{analysis_id}_{biobank}.eps"
+            f"figures/gate_parameters/{args.moe_model}/{analysis_id}_{biobank}.pdf"
         )
 
         print(f"> Processing model: {f}")

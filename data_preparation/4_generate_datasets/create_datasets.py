@@ -165,11 +165,12 @@ if __name__ == "__main__":
         help="The source of the ancestry assignments.",
     )
     parser.add_argument(
-        "--prop-test",
-        dest="prop_test",
-        type=float,
-        default=0.3,
-        help="The proportion of samples to use for testing (default: 0.3).",
+        "--n-folds",
+        "--k-folds",
+        dest="n_folds",
+        type=int,
+        default=10,
+        help="The number of cross-validation folds to create (default: 10).",
     )
     parser.add_argument(
         "--seed",
@@ -180,6 +181,9 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
+
+    if args.n_folds < 2:
+        parser.error("--n-folds must be at least 2.")
 
     # Set the random seed:
     np.random.seed(args.seed)
@@ -196,22 +200,28 @@ if __name__ == "__main__":
         args.ancestry_source,
     )
 
-    print(
-        f"> Saving processed data to: data/harmonized_data/{args.analysis_id}/{args.biobank}/"
-    )
-    makedir(f"data/harmonized_data/{args.analysis_id}/{args.biobank}/")
+    output_dir = f"data/harmonized_data/{args.analysis_id}/{args.biobank}"
+    print(f"> Saving processed data to: {output_dir}/")
+    makedir(output_dir)
 
-    # Save the entire dataset:
-    prs_dataset.save(
-        f"data/harmonized_data/{args.analysis_id}/{args.biobank}/full_data.pkl"
-    )
+    # The full dataset is fold-independent, so retain a single copy at the
+    # biobank level rather than duplicating it in every fold directory.
+    prs_dataset.save(osp.join(output_dir, "full_data.pkl"))
 
-    # Split the dataset into training and testing sets:
-    train_data, test_data = prs_dataset.train_test_split(test_size=args.prop_test)
+    # Save one complementary train/test pair per cross-validation fold.
+    for fold_idx, (train_data, test_data) in enumerate(
+        prs_dataset.k_fold_split(
+            n_splits=args.n_folds,
+            random_state=args.seed,
+        ),
+        start=1,
+    ):
+        fold_name = f"fold_{fold_idx}"
+        fold_dir = osp.join(output_dir, fold_name)
+        makedir(fold_dir)
 
-    train_data.save(
-        f"data/harmonized_data/{args.analysis_id}/{args.biobank}/train_data.pkl"
-    )
-    test_data.save(
-        f"data/harmonized_data/{args.analysis_id}/{args.biobank}/test_data.pkl"
-    )
+        train_data.save(osp.join(fold_dir, "train_data.pkl"))
+        test_data.save(osp.join(fold_dir, "test_data.pkl"))
+        print(
+            f"> Saved {fold_name}: {train_data.N} train / {test_data.N} test samples."
+        )

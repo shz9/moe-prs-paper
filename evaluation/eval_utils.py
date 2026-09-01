@@ -3,16 +3,21 @@ import pandas as pd
 from viprs.eval import eval_incremental_metrics as INCREMENTAL_METRICS
 from viprs.eval import eval_metric_names as EVAL_METRICS
 
+# Minimum number of samples in a group used for evaluation:
+DEFAULT_MIN_GROUP_SIZE = 30
+# Minimum number of cases in a group used for evaluation (for binary classification):
+DEFAULT_MIN_CASES = 15
+# Default number of bootstrap replicates used for metric confidence intervals:
+DEFAULT_BOOTSTRAP_RESAMPLES = 1000
+# Default bootstrap confidence interval coverage:
+DEFAULT_BOOTSTRAP_CI = 0.95
+
 CONT_EVAL_METRICS = {
     m: f
     for m, f in EVAL_METRICS.items()
     if m
     in (
         "Pearson_R",
-        "Spearman_R",
-        "MSE",
-        "R2",
-        "R2_residualized_target",
         "Incremental_R2",
         "Partial_Correlation",
     )
@@ -22,8 +27,239 @@ CONT_EVAL_METRICS = {
 BINARY_EVAL_METRICS = {
     m: f
     for m, f in EVAL_METRICS.items()
-    if m not in list(CONT_EVAL_METRICS.keys()) + ["F1_Score"]
+    if m in [
+        'Liability_R2',
+        'Nagelkerke_R2',
+        'AUROC',
+        'AUPRC'
+    ]
 }
+
+PSEUDO_R2_METRICS = {
+    "Liability_R2",
+    "Nagelkerke_R2",
+    "CoxSnell_R2",
+    "McFadden_R2",
+    "Liability_Probit_R2",
+    "Liability_Logit_R2",
+}
+
+
+def is_pseudo_r2_metric(metric):
+    """
+    Return True for R²-like metrics whose uncertainty should not be estimated
+    with the closed-form linear-model R² standard error.
+    """
+    return str(metric) in PSEUDO_R2_METRICS
+
+
+def _is_binary_vector(y):
+    y = np.asarray(y).reshape(-1)
+    y = y[~pd.isna(y)]
+    if y.size == 0:
+        return False
+
+    try:
+        y_float = y.astype(float)
+    except (TypeError, ValueError):
+        return False
+
+    return set(np.unique(y_float)).issubset({0.0, 1.0})
+
+
+def _row_missing_mask(arr):
+    arr = np.asarray(arr)
+    if arr.ndim == 1:
+        return pd.isna(arr)
+    return pd.isna(arr).reshape(arr.shape[0], -1).any(axis=1)
+
+
+def bootstrap_metric_ci(
+    true_val,
+    pred_val,
+    metric=None,
+    metric_func=None,
+    metric_args=None,
+    phenotype_likelihood=None,
+    n_bootstrap=DEFAULT_BOOTSTRAP_RESAMPLES,
+    ci=DEFAULT_BOOTSTRAP_CI,
+    random_state=None,
+    min_samples=DEFAULT_MIN_GROUP_SIZE,
+    min_cases=DEFAULT_MIN_CASES,
+    return_distribution=False,
+):
+    """
+    Estimate a metric standard error and confidence interval with non-parametric
+    bootstrap resampling.
+
+    For binary phenotypes, resampling is stratified by case/control status and
+    keeps the original number of cases and controls in every bootstrap replicate.
+    This avoids invalid replicates for metrics such as AUROC or pseudo-R² and
+    keeps the case/control ratio fixed within the evaluated group.
+
+    For continuous phenotypes, rows are sampled with replacement from the full
+    evaluated group.
+
+    Parameters
+    ----------
+    true_val : array-like of shape (n_samples,)
+        Observed phenotype values.
+    pred_val : array-like of shape (n_samples,)
+        Predicted scores or fitted values.
+    metric : str, optional
+        Metric name in ``EVAL_METRICS``. Required when ``metric_func`` is None.
+    metric_func : callable, optional
+        Callable with signature ``metric_func(y, pred, *metric_args)``. This is
+        useful for incremental metrics that need a null prediction or covariate
+        matrix in addition to ``y`` and ``pred``.
+    metric_args : tuple/list, optional
+        Additional row-aligned arrays passed to ``metric_func``.
+    phenotype_likelihood : {"binomial", "gaussian"}, optional
+        Phenotype likelihood. If omitted, binary phenotypes are inferred from
+        0/1 values in ``true_val``.
+    n_bootstrap : int, default=1000
+        Number of bootstrap replicates.
+    ci : float, default=0.95
+        Confidence interval coverage.
+    random_state : int or numpy.random.Generator, optional
+        Seed or generator for reproducible resampling.
+    min_samples : int, default=DEFAULT_MIN_GROUP_SIZE
+        Minimum number of complete rows required.
+    min_cases : int, default=DEFAULT_MIN_CASES
+        Minimum number of cases and controls required for binary resampling.
+    return_distribution : bool, default=False
+        If True, include the finite bootstrap replicate values in the result.
+
+    Returns
+    -------
+    dict
+        Dictionary containing ``value``, ``se``, ``ci_lower``, ``ci_upper``,
+        ``n``, ``n_bootstrap``, and ``n_bootstrap_valid``.
+    """
+
+    if metric_func is None:
+        if metric is None:
+            raise ValueError("Either metric or metric_func must be provided.")
+        metric_func = EVAL_METRICS[metric]
+
+    n_bootstrap = int(n_bootstrap)
+    if n_bootstrap < 2:
+        raise ValueError("n_bootstrap must be at least 2.")
+
+    ci = float(ci)
+    if not (0.0 < ci < 1.0):
+        raise ValueError("ci must be in (0, 1).")
+
+    y = np.asarray(true_val).reshape(-1)
+    pred = np.asarray(pred_val).reshape(-1)
+    if y.shape[0] != pred.shape[0]:
+        raise ValueError(
+            f"true_val and pred_val length mismatch: {y.shape[0]} vs {pred.shape[0]}."
+        )
+
+    if metric_args is None:
+        metric_args = ()
+    elif not isinstance(metric_args, (tuple, list)):
+        metric_args = (metric_args,)
+
+    extra_args = []
+    valid = (~pd.isna(y)) & (~pd.isna(pred))
+    for i, arg in enumerate(metric_args):
+        arr = arg.to_numpy() if hasattr(arg, "to_numpy") else np.asarray(arg)
+        if arr.shape[0] != y.shape[0]:
+            raise ValueError(
+                f"metric_args[{i}] length mismatch: expected {y.shape[0]}, got {arr.shape[0]}."
+            )
+        valid &= ~_row_missing_mask(arr)
+        extra_args.append(arr)
+
+    y = y[valid]
+    pred = pred[valid]
+    extra_args = [arr[valid] for arr in extra_args]
+    n = int(y.shape[0])
+
+    out = {
+        "value": np.nan,
+        "se": np.nan,
+        "ci_lower": np.nan,
+        "ci_upper": np.nan,
+        "n": n,
+        "n_bootstrap": n_bootstrap,
+        "n_bootstrap_valid": 0,
+    }
+
+    if n < min_samples:
+        if return_distribution:
+            out["bootstrap_values"] = np.array([], dtype=float)
+        return out
+
+    is_binary = phenotype_likelihood == "binomial" or (
+        phenotype_likelihood is None and _is_binary_vector(y)
+    )
+
+    if is_binary:
+        y_float = y.astype(float)
+        case_idx = np.where(y_float == 1.0)[0]
+        control_idx = np.where(y_float == 0.0)[0]
+        if len(case_idx) < min_cases or len(control_idx) < min_cases:
+            if return_distribution:
+                out["bootstrap_values"] = np.array([], dtype=float)
+            return out
+        sample_indices = (
+            lambda rng: np.concatenate(
+                [
+                    rng.choice(case_idx, size=len(case_idx), replace=True),
+                    rng.choice(control_idx, size=len(control_idx), replace=True),
+                ]
+            )
+        )
+    else:
+        all_idx = np.arange(n)
+        sample_indices = lambda rng: rng.choice(all_idx, size=n, replace=True)
+
+    observed_args = [arr for arr in extra_args]
+    try:
+        out["value"] = float(metric_func(y, pred, *observed_args))
+    except Exception:
+        if return_distribution:
+            out["bootstrap_values"] = np.array([], dtype=float)
+        return out
+
+    rng = (
+        random_state
+        if isinstance(random_state, np.random.Generator)
+        else np.random.default_rng(random_state)
+    )
+
+    boot_values = []
+    for _ in range(n_bootstrap):
+        idx = sample_indices(rng)
+        if is_binary:
+            rng.shuffle(idx)
+
+        try:
+            boot_val = float(
+                metric_func(y[idx], pred[idx], *[arr[idx] for arr in extra_args])
+            )
+        except Exception:
+            continue
+
+        if np.isfinite(boot_val):
+            boot_values.append(boot_val)
+
+    boot_values = np.asarray(boot_values, dtype=float)
+    out["n_bootstrap_valid"] = int(boot_values.shape[0])
+
+    if boot_values.shape[0] >= 2:
+        alpha = (1.0 - ci) / 2.0
+        out["se"] = float(np.std(boot_values, ddof=1))
+        out["ci_lower"] = float(np.quantile(boot_values, alpha))
+        out["ci_upper"] = float(np.quantile(boot_values, 1.0 - alpha))
+
+    if return_distribution:
+        out["bootstrap_values"] = boot_values
+
+    return out
 
 
 def rowwise_cosine_similarity(X, Y, eps=1e-12):
@@ -63,7 +299,12 @@ def generate_predictions(prs_dataset, models):
             preds[m_name + "-PRS-only"] = m.predict_prs(prs_dataset).flatten()
         except Exception as e:
             pass
-        preds[m_name] = m.predict(prs_dataset).flatten()
+
+        try:
+            preds[m_name] = m.predict(prs_dataset).flatten()
+        except Exception as e:
+            print(f"Failed to predict for {m_name}: {e}")
+            pass
 
     return pd.DataFrame(preds)
 
@@ -296,7 +537,10 @@ def generate_continuous_masks(prs_dataset, cont_group_cols, n_bins=4):
 
 
 def generate_coarse_ancestry_masks(
-    prs_dataset, ancestry_col="Ancestry", ref_ancestry="EUR", min_group_size=30
+    prs_dataset,
+    ancestry_col="Ancestry",
+    ref_ancestry="EUR",
+    min_group_size=DEFAULT_MIN_GROUP_SIZE,
 ):
     """
     Generate masks for coarse ancestry groupings: EUR and non-EUR.
@@ -318,7 +562,9 @@ def generate_coarse_ancestry_masks(
     return masks
 
 
-def generate_categorical_masks(prs_dataset, cat_group_cols, min_group_size=30):
+def generate_categorical_masks(
+    prs_dataset, cat_group_cols, min_group_size=DEFAULT_MIN_GROUP_SIZE
+):
     """
     Generate masks for the different groups in the dataset.
     This function takes a PRSDataset object and a list of categorical columns

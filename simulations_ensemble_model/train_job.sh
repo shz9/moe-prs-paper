@@ -12,6 +12,6 @@
 
 source "env/moe/bin/activate"
 
-sim_scenario=${1:-"sim_1/HEIGHT/ukbb/context_Ancestry_h0.6"}
+sim_scenario=${1:-"sim_1/HEIGHT_MA/ukbb/context_Ancestry_h0.6"}
 
 python3 model/train_models.py --dataset-path "data/harmonized_data_simulations/"$sim_scenario"/train_data.pkl"

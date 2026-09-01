@@ -30,7 +30,7 @@ cols_dict = {
     "ATHEROSCLEROSIS_OCCURRENCE": "CAD3",
     "HEART_DISEASE_OCCURRENCE": "CAD4",
     # Heart failure:
-    "HEART_FAILURE_OCCURRENCE": "HF",
+    # "HEART_FAILURE_OCCURRENCE": "HF", # Too small of a sample; exclude for now
     # Atrial fibrillation:
     "ATRIAL_FIBRILLATION_OCCURRENCE": "AF",
     # Stroke:
@@ -315,6 +315,7 @@ asthma.to_csv(
 # -------------------------------------------------------
 # Process data for stroke:
 
+"""
 stroke = pheno_df[["FID", "IID", "STR"]].copy()
 stroke["STR"] = stroke["STR"].replace(binary_nan)
 stroke.columns = ["FID", "IID", "phenotype"]
@@ -327,6 +328,7 @@ stroke.to_csv(
     header=False,
     na_rep="NA",
 )
+"""
 
 # -------------------------------------------------------
 # Process data for T2D:
@@ -411,6 +413,7 @@ af.to_csv(
 # -------------------------------------------------------
 # Process data for HF:
 
+"""
 hf = pheno_df[["FID", "IID", "HF"]].copy()
 hf["HF"] = hf["HF"].replace(binary_nan)
 hf.columns = ["FID", "IID", "phenotype"]
@@ -423,6 +426,7 @@ hf.to_csv(
     header=False,
     na_rep="NA",
 )
+"""
 
 # -------------------------------------------------------
 # Process data for CAD:

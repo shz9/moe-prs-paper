@@ -6,7 +6,7 @@ pgs_pheno_files=(
     "tables/multitrait_prs_table.csv"
 )
 biobanks=("ukbb" "cartagene")
-prop_test=0.3  # Proportion of samples to use for testing
+n_folds=10
 
 source env/moe/bin/activate
 
@@ -25,7 +25,7 @@ do
                 --biobank "$biobank" \
                 --phenotype "$phenotype" \
                 --pcs-source "1kghdp" \
-                --prop-test "$prop_test"
+                --n-folds "$n_folds"
 
         done
     done
@@ -35,10 +35,11 @@ done
 # Create control datasets with non-informative PRSs:
 python data_preparation/4_generate_datasets/create_control_datasets.py \
     --analysis-file tables/multitrait_prs_table.csv \
-    --analyses CAD_MT,T2D_MT,HTN_MT,STR_MT,HF_MT \
+    --analyses T1D_MT,T2D_MT,ASTHMA_MT,GOUT_MT,CAD_MT,AF_MT,HTN_MT,STR_MT,HF_MT \
     --biobank ukbb \
     --output-file tables/control_multitrait_prs_table.csv \
     --pcs-source "1kghdp" \
-    --prop-test "$prop_test" \
+    --n-folds "$n_folds" \
     --create-harmonized-datasets \
+    --match-reference-split \
     --target-biobanks ukbb cartagene

@@ -102,7 +102,7 @@ def generate_model_colors(metrics_df, metric, palette="Set2", n_model_types=4):
 def performance_by_category_plots(
     metrics_df,
     output_file=None,
-    category="Ancestry",
+    category="Coarse Ancestry",
     metric="Incremental_R2",
     min_sample_size=100,
     aggregate_single_prs=True,
@@ -151,7 +151,7 @@ if __name__ == "__main__":
         "--category",
         dest="category",
         type=str,
-        default=["Ancestry"],
+        default=["Coarse Ancestry"],
         nargs="+",
         help="The category (or list of categories) to plot the predictive performance for.",
     )

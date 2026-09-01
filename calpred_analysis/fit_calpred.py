@@ -12,7 +12,7 @@ parent_dir = osp.dirname(osp.dirname(osp.abspath(__file__)))
 sys.path.append(parent_dir)
 sys.path.append(osp.join(parent_dir, "model/"))
 sys.path.append(osp.join(parent_dir, "plotting/"))
-from plot_utils import BIOBANK_NAME_MAP, MODEL_NAME_MAP, PHENOTYPE_NAME_MAP
+from plot_utils import ANALYSIS_TO_PHENOTYPE_MAP, BIOBANK_NAME_MAP, MODEL_NAME_MAP
 from PRSDataset import PRSDataset
 
 
@@ -67,7 +67,7 @@ if __name__ == "__main__":
     # Read the dataset:
     dataset = PRSDataset.from_pickle(args.dataset)
 
-    pheno_name, biobank = args.dataset.split("/")[-3:-1]
+    analysis_id, biobank = args.dataset.split("/")[-3:-1]
 
     calpred_output = fit_calpred_model(dataset)
 
@@ -77,7 +77,8 @@ if __name__ == "__main__":
         .dropna(axis=0)
         .drop(["const"])
     )
-    output_df.columns = [MODEL_NAME_MAP[p] for p in pgs_names]
+    model_name_map = MODEL_NAME_MAP.get(analysis_id, {})
+    output_df.columns = [model_name_map.get(p, p) for p in pgs_names]
     output_df = output_df.loc[["Age", "Sex"] + [f"PC{i + 1}" for i in range(10)], :]
 
     min_abs_v = np.abs(output_df.values).max()
@@ -93,13 +94,10 @@ if __name__ == "__main__":
         cbar_kws={"label": "Effect on prediction accuracy ($\\beta_\\sigma$)"},
     )
 
-    if pheno_name == "LDL_adj":
-        pheno_name = "LDL Cholesterol - Adj"
-    else:
-        pheno_name = PHENOTYPE_NAME_MAP[pheno_name]
+    pheno_name = ANALYSIS_TO_PHENOTYPE_MAP.get(analysis_id, analysis_id)
 
-    plt.title(f"{pheno_name} ({BIOBANK_NAME_MAP[biobank]})")
+    plt.title(f"{pheno_name} ({BIOBANK_NAME_MAP.get(biobank, biobank)})")
     plt.xlabel("Stratified polygenic scores")
     plt.ylabel("Covariates")
     plt.tight_layout()
-    plt.savefig(f"figures/calpred/{pheno_name}_{biobank}.eps")
+    plt.savefig(f"figures/calpred/{analysis_id}_{biobank}.eps")

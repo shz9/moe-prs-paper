@@ -426,7 +426,10 @@ if __name__ == "__main__":
         dest="dataset_path",
         type=str,
         required=True,
-        help="The path to the dataset file.",
+        help=(
+            "Path to a fold-specific training dataset, e.g. "
+            "data/harmonized_data/{analysis_id}/{biobank}/{fold}/train_data.pkl."
+        ),
     )
     parser.add_argument(
         "--baseline-kwargs",
@@ -497,7 +500,6 @@ if __name__ == "__main__":
         "harmonized_data", "trained_models"
     )
 
-    analysis_id = args.dataset_path.split("/")[2]
     dataset_name = osp.basename(args.dataset_path).replace(".pkl", "")
     output_dir = osp.join(output_dir, dataset_name)
 

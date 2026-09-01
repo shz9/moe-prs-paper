@@ -486,6 +486,72 @@ class PRSDataset(Dataset):
 
         return train_dataset, test_dataset
 
+    def k_fold_split(self, n_splits=10, random_state=None):
+        """
+        Generate reproducible train/test datasets for K-fold cross-validation.
+
+        Binary phenotypes are stratified so each fold preserves the overall
+        case/control balance. Continuous phenotypes use standard shuffled
+        K-fold splitting.
+
+        Parameters
+        ----------
+        n_splits : int, default=10
+            Number of cross-validation folds.
+        random_state : int, optional
+            Seed controlling how samples are shuffled before splitting.
+
+        Yields
+        ------
+        tuple[PRSDataset, PRSDataset]
+            The training and held-out test datasets for each fold.
+        """
+        from sklearn.model_selection import KFold, StratifiedKFold
+
+        if isinstance(n_splits, bool) or not isinstance(n_splits, (int, np.integer)):
+            raise TypeError("n_splits must be an integer.")
+        if n_splits < 2:
+            raise ValueError("n_splits must be at least 2.")
+        if n_splits > self.N:
+            raise ValueError(
+                f"n_splits={n_splits} cannot exceed the number of samples ({self.N})."
+            )
+
+        sample_indices = np.arange(self.N)
+        # Read directly from the dataframe so splitting is independent of the
+        # dataset's active numpy/torch backend.
+        phenotype = self.data[self.phenotype_col].to_numpy().reshape(-1)
+
+        if self.phenotype_likelihood == "binomial":
+            _, class_counts = np.unique(phenotype, return_counts=True)
+            if class_counts.min() < n_splits:
+                raise ValueError(
+                    f"n_splits={n_splits} exceeds the smallest phenotype class "
+                    f"size ({class_counts.min()}); stratified folds cannot be created."
+                )
+            splitter = StratifiedKFold(
+                n_splits=n_splits,
+                shuffle=True,
+                random_state=random_state,
+            )
+            splits = splitter.split(sample_indices, phenotype)
+        else:
+            splitter = KFold(
+                n_splits=n_splits,
+                shuffle=True,
+                random_state=random_state,
+            )
+            splits = splitter.split(sample_indices)
+
+        for train_idx, test_idx in splits:
+            train_dataset = copy.deepcopy(self)
+            train_dataset.filter_samples(train_idx)
+
+            test_dataset = copy.deepcopy(self)
+            test_dataset.filter_samples(test_idx)
+
+            yield train_dataset, test_dataset
+
     def get_prs_predictions(self, scaler=None):
         """
         Get the PRS predictions from the dataset.

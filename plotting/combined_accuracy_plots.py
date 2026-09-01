@@ -5,7 +5,7 @@ import os.path as osp
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
-from error_bars import add_error_bars_to_catplot
+from error_bars import add_error_bars, add_error_bars_to_catplot
 from magenpy.utils.system_utils import makedir
 from plot_predictive_performance import generate_model_colors, postprocess_metrics_df
 from plot_utils import (
@@ -39,6 +39,11 @@ def plot_combined_accuracy_metrics(
     height=5,
     aspect=1,
     x_tick_rotation=None,
+    legend_title=None,
+    legend_fontsize=None,
+    legend_title_fontsize=None,
+    ylim=None,
+    title=None,
 ):
     # ---------------------------------------------------------------------
     # Sanity checks / preparation
@@ -73,6 +78,7 @@ def plot_combined_accuracy_metrics(
         palette=palette,
         hue_order=hue_order,
         kind="bar",
+        errorbar=None,
         height=height,
         aspect=aspect,
         sharey=sharey,
@@ -80,20 +86,34 @@ def plot_combined_accuracy_metrics(
     )
 
     if f"{metric}_err" in metrics_df.columns:
-        add_error_bars_to_catplot(
-            grid,
-            metrics_df,
-            x,
-            metric,
-            hue="Model Name",
-            hue_order=hue_order,
-            col=column,
-            row=row,
-        )
+        is_unfaceted = column is None and row is None
+        plot_target = grid.axes.flat[0] if is_unfaceted else grid
+        if is_unfaceted:
+            add_error_bars(
+                plot_target,
+                metrics_df,
+                x,
+                metric,
+                hue="Model Name",
+                hue_order=hue_order,
+                order=order,
+            )
+        else:
+            add_error_bars_to_catplot(
+                grid,
+                metrics_df,
+                x,
+                metric,
+                hue="Model Name",
+                hue_order=hue_order,
+                col=column,
+                row=row,
+                order=order,
+            )
 
         if test_models is not None:
             add_significance_annotations(
-                grid,
+                plot_target,
                 metrics_df,
                 x,
                 metric,
@@ -109,6 +129,18 @@ def plot_combined_accuracy_metrics(
         x_var=x,
         y_var=METRIC_NAME_MAP[metric],
     )
+    if ylim is not None:
+        grid.set(ylim=ylim)
+
+    # Update legend title
+    if legend_title is not None and grid.legend is not None:
+        grid.legend.set_title(legend_title)
+    if grid.legend is not None:
+        if legend_fontsize is not None:
+            for text in grid.legend.texts:
+                text.set_fontsize(legend_fontsize)
+        if legend_title_fontsize is not None:
+            grid.legend.get_title().set_fontsize(legend_title_fontsize)
 
     subtitle_to_remove = None
 
@@ -119,12 +151,19 @@ def plot_combined_accuracy_metrics(
 
     if subtitle_to_remove is not None:
         for ax in grid.axes.flat:
-            title = ax.get_title()
-            if title.startswith(f"{subtitle_to_remove} = "):
-                ax.set_title(title.replace(f"{subtitle_to_remove} = ", ""))
+            axis_title = ax.get_title()
+            if axis_title.startswith(f"{subtitle_to_remove} = "):
+                ax.set_title(axis_title.replace(f"{subtitle_to_remove} = ", ""))
+
+    if title is not None:
+        grid.figure.suptitle(title)
 
     if x_tick_rotation is not None:
         grid.tick_params(axis="x", rotation=x_tick_rotation)
+        if x_tick_rotation != 0:
+            for ax in grid.axes.flat:
+                for label in ax.get_xticklabels():
+                    label.set_ha("right")
 
     if output_f is None:
         plt.show()
@@ -152,7 +191,7 @@ if __name__ == "__main__":
         "--category",
         dest="category",
         type=str,
-        default=["Ancestry"],
+        default=["Coarse Ancestry"],
         nargs="+",
         help="The category (or list of categories) to plot the predictive performance for.",
     )
@@ -174,9 +213,12 @@ if __name__ == "__main__":
         "--dataset",
         dest="dataset",
         type=str,
-        choices={"train", "test"},
-        default="test",
-        help="The type of dataset to plot predictive performance on.",
+        choices={"train", "test", "full"},
+        default=None,
+        help=(
+            "Dataset to plot. Defaults to held-out folds for UKBB and the full "
+            "held-out cohort for CARTaGENE."
+        ),
     )
     parser.add_argument(
         "--binary-metric",
@@ -218,11 +260,17 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    dataset = args.dataset
+    if dataset is None:
+        dataset = "full" if args.biobank == "cartagene" else "test"
+
     sns.set_context("paper", font_scale=1.5)
 
     metrics_dfs = {}
 
-    for f in glob.glob(f"data/evaluation/*/{args.biobank}/{args.dataset}_data.csv"):
+    evaluation_dirs = glob.glob(f"data/evaluation/*/{args.biobank}")
+    for evaluation_dir in evaluation_dirs:
+        f = osp.join(evaluation_dir, f"{dataset}_data.csv")
         analysis_id = f.split("/")[-3]
 
         analysis_table_id = ANALYSIS_TO_TABLE_MAP.get(analysis_id)
@@ -233,7 +281,7 @@ if __name__ == "__main__":
         if analysis_table_id == "sex_biased_prs_table":
             strat_var = ["Sex"]
         else:
-            strat_var = ["Ancestry", "Coarse Ancestry"]
+            strat_var = ["Coarse Ancestry"]
 
         df = read_transform_eval_metrics(f)
         if "train_biobank" in df.columns:
@@ -283,13 +331,14 @@ if __name__ == "__main__":
             else:
                 metrics_dfs[metric_cat].append(eval_df)
 
-    output_dir = f"figures/accuracy/{args.biobank}/{args.dataset}/"
+    # The output directory is determined by the metric kind, biobank, and dataset.
+    output_dir = f"figures/accuracy/{args.biobank}/{dataset}/{args.metric_kind}/"
+
     output_dir = osp.join(
         output_dir, ["cross_biobank", "same_biobank"][args.restrict_to_same_biobank]
     )
 
     for pheno_eval_cat, dfs in metrics_dfs.items():
-
         if len(dfs) < 1:
             raise ValueError(
                 f"No data to plot after applying filters for {pheno_eval_cat}."

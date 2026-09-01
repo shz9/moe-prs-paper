@@ -1,4 +1,5 @@
 import glob
+import os
 import os.path as osp
 import sys
 
@@ -8,6 +9,7 @@ import seaborn as sns
 parent_dir = osp.dirname(osp.dirname(osp.abspath(__file__)))
 sys.path.append(parent_dir)
 sys.path.append(osp.join(parent_dir, "model/"))
+sys.path.append(osp.join(parent_dir, "evaluation/"))
 
 from model_utils import (
     get_analysis_id_mapper,
@@ -221,9 +223,361 @@ def sort_groups(groups):
         return sorted(groups)
 
 
-def read_transform_eval_metrics(file_path):
+def _filter_by_ref_model_biobank(metrics_df, ref_model_biobank):
+    if "ref_model_biobank" not in metrics_df.columns:
+        raise ValueError(
+            "Reference-biobank filtering requested, but 'ref_model_biobank' "
+            "is not in metrics_df."
+        )
 
-    eval_df = pd.read_csv(file_path)
+    ref_model_biobank = (
+        [ref_model_biobank]
+        if isinstance(ref_model_biobank, str)
+        else ref_model_biobank
+    )
+    ref_model_biobank = list(ref_model_biobank)
+
+    keep = pd.Series(False, index=metrics_df.index)
+    literal = [
+        x for x in ref_model_biobank if x not in ("train_biobank", "test_biobank")
+    ]
+    if literal:
+        keep |= metrics_df["ref_model_biobank"].isin(literal)
+    if "train_biobank" in ref_model_biobank:
+        keep |= metrics_df["ref_model_biobank"].eq(metrics_df["train_biobank"])
+    if "test_biobank" in ref_model_biobank:
+        keep |= metrics_df["ref_model_biobank"].eq(metrics_df["test_biobank"])
+
+    return metrics_df.loc[keep].copy()
+
+
+def _cross_validation_metric_files(file_path):
+    """Return fold-level metric files corresponding to ``file_path``."""
+    file_path = osp.normpath(file_path)
+    parent_dir = osp.dirname(file_path)
+
+    if osp.basename(parent_dir).startswith("fold_"):
+        biobank_dir = osp.dirname(parent_dir)
+    else:
+        biobank_dir = parent_dir
+
+    return sorted(
+        glob.glob(osp.join(biobank_dir, "fold_*", osp.basename(file_path)))
+    )
+
+
+def evaluation_metrics_exist(file_path):
+    """Return whether legacy or fold-level evaluation metrics exist."""
+    return osp.exists(file_path) or bool(_cross_validation_metric_files(file_path))
+
+
+def generate_external_cross_validation_metrics(
+    file_path,
+    train_biobank="ukbb",
+    metrics=None,
+    n_bootstrap=1000,
+    bootstrap_ci=0.95,
+    random_state=42,
+):
+    """
+    Generate bootstrapped metrics for a fold-ensemble on external full data.
+
+    Individual-level predictions are averaged across all training-fold models
+    before metrics are computed. External participants are then resampled to
+    estimate sampling uncertainty. The ensemble table is persisted at the
+    requested root-level ``full_data.csv`` path; legacy per-fold files are left
+    untouched but are superseded by this table when plotting.
+    """
+    file_path = osp.normpath(file_path)
+    if osp.basename(file_path) != "full_data.csv":
+        raise ValueError(
+            "On-the-fly external evaluation only supports full_data.csv targets."
+        )
+
+    test_biobank_dir = osp.dirname(file_path)
+    test_biobank = osp.basename(test_biobank_dir)
+    analysis_id = osp.basename(osp.dirname(test_biobank_dir))
+
+    if isinstance(metrics, str):
+        metrics = [metrics]
+    elif metrics is not None:
+        metrics = list(metrics)
+
+    output_file = (
+        file_path if osp.isabs(file_path) else osp.join(parent_dir, file_path)
+    )
+    if osp.exists(output_file):
+        try:
+            existing_df = pd.read_csv(output_file)
+        except (OSError, ValueError):
+            existing_df = pd.DataFrame()
+        is_bootstrap_ensemble = (
+            not existing_df.empty
+            and "evaluation_scope" in existing_df
+            and existing_df["evaluation_scope"]
+            .eq("external_ensemble_bootstrap")
+            .all()
+            and "uncertainty_method" in existing_df
+            and existing_df["uncertainty_method"]
+            .eq("participant_bootstrap")
+            .all()
+        )
+        available_metrics = (
+            set(existing_df["metric"].dropna())
+            if "metric" in existing_df
+            else set()
+        )
+        if is_bootstrap_ensemble and (
+            metrics is None or set(metrics).issubset(available_metrics)
+        ):
+            return [file_path]
+
+    model_fold_dirs = sorted(
+        glob.glob(
+            osp.join(
+                parent_dir,
+                "data",
+                "trained_models",
+                analysis_id,
+                train_biobank,
+                "fold_*",
+            )
+        )
+    )
+    if not model_fold_dirs:
+        raise FileNotFoundError(
+            "Cannot generate external metrics: no fold models found beneath "
+            f"data/trained_models/{analysis_id}/{train_biobank}/."
+        )
+
+    dataset_path = osp.join(
+        parent_dir,
+        "data",
+        "harmonized_data",
+        analysis_id,
+        test_biobank,
+        "full_data.pkl",
+    )
+    if not osp.exists(dataset_path):
+        raise FileNotFoundError(
+            f"Cannot generate external metrics: dataset not found at {dataset_path}"
+        )
+
+    model_folds = [osp.basename(path) for path in model_fold_dirs]
+    print(
+        f"> Generating bootstrapped external ensemble metrics for {analysis_id} "
+        f"({test_biobank}; averaging predictions from folds: "
+        f"{', '.join(model_folds)}; metrics: "
+        f"{', '.join(metrics) if metrics is not None else 'all'})"
+    )
+
+    # Lazy imports keep the lightweight plotting helpers inexpensive for plots
+    # that only read existing evaluation CSVs.
+    from baseline_models import (
+        AncestryWeightedPRS,
+        AttributePartitionedPRS,
+        MultiPRS,
+    )
+    from evaluate_predictive_performance import (
+        average_fold_predictions,
+        stratified_evaluation,
+    )
+    from moe import MoEPRS
+    from moe_pytorch import TorchMoEPRS
+    from PRSDataset import PRSDataset
+
+    prs_dataset = PRSDataset.from_pickle(dataset_path)
+    trained_models = {}
+    trained_analysis_root = osp.join(
+        parent_dir,
+        "data",
+        "trained_models",
+        analysis_id,
+    )
+    model_files = sorted(
+        glob.glob(
+            osp.join(
+                trained_analysis_root,
+                train_biobank,
+                "fold_*",
+                "*",
+                "*.pkl",
+            )
+        )
+    )
+    for model_file in model_files:
+        path_parts = osp.relpath(model_file, trained_analysis_root).split(os.sep)
+        if len(path_parts) != 4:
+            raise ValueError(f"Unexpected trained model path: {model_file}")
+
+        model_biobank, model_fold, model_source, model_filename = path_parts
+        model_basename = osp.splitext(model_filename)[0]
+        model_id = (
+            f"{model_biobank}/{model_fold}/{model_source}:{model_basename}"
+        )
+
+        if "moe" in model_id.lower():
+            if "torch" in model_id.lower():
+                trained_models[model_id] = TorchMoEPRS.from_saved_model(model_file)
+            else:
+                trained_models[model_id] = MoEPRS.from_saved_model(model_file)
+        elif "AncestryWeightedPRS" in model_id:
+            trained_models[model_id] = AncestryWeightedPRS.from_saved_model(
+                model_file
+            )
+        elif "SexMatchedPRS" in model_id:
+            trained_models[model_id] = AttributePartitionedPRS.from_saved_model(
+                model_file
+            )
+        else:
+            trained_models[model_id] = MultiPRS.from_saved_model(model_file)
+
+    if not trained_models:
+        raise FileNotFoundError(
+            f"No trained models found for {analysis_id}/{train_biobank}."
+        )
+
+    ensemble_predictions, ensemble_catalog = average_fold_predictions(
+        prs_dataset, trained_models
+    )
+    eval_df = stratified_evaluation(
+        prs_dataset,
+        trained_predictions=ensemble_predictions,
+        model_catalog=ensemble_catalog,
+        test_biobank=test_biobank,
+        cat_group_cols=["Sex"] if "_SEX" in analysis_id else None,
+        coarse_ancestry_only=True,
+        metrics=metrics,
+        evaluate_base_models=False,
+        bootstrap=True,
+        n_bootstrap=n_bootstrap,
+        bootstrap_ci=bootstrap_ci,
+        random_state=random_state,
+    )
+    eval_df["analysis_id"] = analysis_id
+    eval_df["test_biobank"] = test_biobank
+    eval_df["test_dataset"] = "full_data"
+    eval_df["evaluation_scope"] = "external_ensemble_bootstrap"
+    eval_df["test_fold"] = "ensemble"
+
+    if metrics is not None and osp.exists(output_file):
+        existing_df = pd.read_csv(output_file)
+        existing_is_ensemble = (
+            not existing_df.empty
+            and "evaluation_scope" in existing_df
+            and existing_df["evaluation_scope"]
+            .eq("external_ensemble_bootstrap")
+            .all()
+        )
+        if existing_is_ensemble:
+            existing_df = existing_df.loc[~existing_df["metric"].isin(metrics)]
+            eval_df = pd.concat([existing_df, eval_df], ignore_index=True)
+
+    os.makedirs(osp.dirname(output_file), exist_ok=True)
+    eval_df.to_csv(output_file, index=False)
+    return [file_path]
+
+
+def aggregate_cross_validation_metrics(eval_df):
+    """
+    Aggregate held-out metrics across cross-validation folds.
+
+    ``value`` is the arithmetic mean across folds and ``se`` is the standard
+    error of that mean (fold-level sample SD divided by sqrt(K)). Analytical
+    standard errors stored in the individual evaluation files are deliberately
+    ignored. ``n`` is summed for disjoint held-out folds and retained as the
+    per-evaluation cohort size for repeated full-cohort external validation.
+    """
+    if (
+        "evaluation_scope" in eval_df
+        and not eval_df.empty
+        and eval_df["evaluation_scope"]
+        .eq("external_ensemble_bootstrap")
+        .all()
+    ):
+        # These rows already describe one fold-prediction ensemble, and their
+        # SE comes from participant resampling. Treating ``ensemble`` as a fold
+        # would overwrite the bootstrap uncertainty with a one-value fold SE.
+        return eval_df.copy()
+
+    fold_cols = [col for col in ("test_fold", "train_fold") if col in eval_df]
+    if len(fold_cols) == 0:
+        return eval_df.copy()
+
+    excluded_cols = {"value", "se", "n", *fold_cols}
+    group_cols = [col for col in eval_df.columns if col not in excluded_cols]
+
+    def fold_standard_error(values):
+        values = values.dropna()
+        if len(values) < 2:
+            return float("nan")
+        return values.std(ddof=1) / (len(values) ** 0.5)
+
+    summary = (
+        eval_df.groupby(group_cols, dropna=False, sort=False)
+        .agg(
+            value=("value", "mean"),
+            se=("value", fold_standard_error),
+            n_sum=("n", "sum"),
+            n_max=("n", "max"),
+            n_folds=("value", "count"),
+        )
+        .reset_index()
+    )
+
+    if "evaluation_scope" in summary.columns:
+        is_external = summary["evaluation_scope"].eq("external_full")
+    else:
+        is_external = pd.Series(False, index=summary.index)
+
+    summary["n"] = summary["n_sum"]
+    summary.loc[is_external, "n"] = summary.loc[is_external, "n_max"]
+
+    return summary.drop(columns=["n_sum", "n_max"])
+
+
+def read_transform_eval_metrics(
+    file_path,
+    generate_missing_external=False,
+    train_biobank="ukbb",
+    external_metrics=None,
+):
+    if generate_missing_external:
+        generate_external_cross_validation_metrics(
+            file_path,
+            train_biobank=train_biobank,
+            metrics=external_metrics,
+        )
+
+    fold_files = _cross_validation_metric_files(file_path)
+    root_eval_df = pd.read_csv(file_path) if osp.exists(file_path) else None
+    use_external_ensemble = (
+        root_eval_df is not None
+        and not root_eval_df.empty
+        and "evaluation_scope" in root_eval_df
+        and root_eval_df["evaluation_scope"]
+        .eq("external_ensemble_bootstrap")
+        .all()
+    )
+
+    if use_external_ensemble:
+        eval_df = root_eval_df
+    elif fold_files:
+        fold_dfs = []
+        for fold_file in fold_files:
+            fold_df = pd.read_csv(fold_file)
+            if "test_fold" not in fold_df.columns:
+                fold_df["test_fold"] = osp.basename(osp.dirname(fold_file))
+            fold_dfs.append(fold_df)
+
+        eval_df = aggregate_cross_validation_metrics(
+            pd.concat(fold_dfs, ignore_index=True)
+        )
+    else:
+        # Backwards compatibility for evaluation results from a single split.
+        if root_eval_df is None:
+            raise FileNotFoundError(file_path)
+        eval_df = root_eval_df
 
     analysis_id = eval_df["analysis_id"].iloc[0] if len(eval_df) > 0 else None
     name_map = MODEL_NAME_MAP.get(analysis_id, {})
@@ -277,7 +631,9 @@ def postprocess_metrics_df(
     metrics_df,
     metric,
     metric_kind="base",
-    category="Ancestry",
+    ref_model_biobank=None,
+    prediction_type=None,
+    category="Coarse Ancestry",
     min_sample_size=100,
     aggregate_single_prs=True,
     add_training_biobank_to_model_name=False,
@@ -285,20 +641,34 @@ def postprocess_metrics_df(
 
     # Sanity checks:
     assert metric_kind in ("incremental_vs_ref", "base")
+    if ref_model_biobank is not None:
+        assert metric_kind == "incremental_vs_ref", (
+            "ref_model_biobank filtering only applies when "
+            "metric_kind='incremental_vs_ref'."
+        )
 
     # ------------------------------------------------------
     # Filter by metric from long-format table
+    if prediction_type is None:
+        prediction_type = ["prs_only", "full"][
+            metric_kind == "incremental_vs_ref"
+        ]
+    if prediction_type not in {"prs_only", "full"}:
+        raise ValueError("prediction_type must be either 'prs_only' or 'full'.")
+
     sub_metrics_df = metrics_df.loc[
         (metrics_df["metric"] == metric)
         & (metrics_df["metric_kind"] == metric_kind)
         & (
             metrics_df["model_category"].isin(["SinglePRS", "Covariates"])
-            | (
-                metrics_df["prediction_type"]
-                == ["prs_only", "full"][metric_kind == "incremental_vs_ref"]
-            )
+            | (metrics_df["prediction_type"] == prediction_type)
         )
     ].copy()
+
+    if ref_model_biobank is not None:
+        sub_metrics_df = _filter_by_ref_model_biobank(
+            sub_metrics_df, ref_model_biobank
+        )
 
     # ------------------------------------------------------
     # Transform to wide-table format:
@@ -347,7 +717,14 @@ def postprocess_metrics_df(
         single_model_label,
     ]
 
-    if metric in ("PR_AUC", "ROC_AUC", "MSE", "Pearson_R"):
+    if metric in (
+        "AUPRC",
+        "AUROC",
+        "PR_AUC",
+        "ROC_AUC",
+        "MSE",
+        "Pearson_R",
+    ):
         model_cats.append("Covariates")
 
     sub_metrics_df = sub_metrics_df.loc[
@@ -388,13 +765,19 @@ def extract_accuracy_data_all_phenotypes(
     moe_model_name,
     test_biobank,
     train_biobank=None,
+    ref_model_biobank=None,
     dataset="test_data",
     analysis_table_id="multi_ancestry_prs_table",
     binary_metric="Nagelkerke_R2",
+    metric_kind="base",
+    prediction_type=None,
     keep_analyses=None,
     exclude_analyses=None,
     exclude_all_group=True,
     add_training_biobank_to_model_name=False,
+    generate_missing_external=False,
+    external_metric=None,
+    aggregate_single_prs=True,
 ):
     analysis_results = []
 
@@ -411,17 +794,38 @@ def extract_accuracy_data_all_phenotypes(
             if analysis_id in exclude_analyses:
                 continue
 
+        eval_file = f"data/evaluation/{analysis_id}/{test_biobank}/{dataset}.csv"
+        if not generate_missing_external and not evaluation_metrics_exist(eval_file):
+            print(
+                f"> Skipping {analysis_id}/{test_biobank}: no evaluation "
+                f"metrics found for {dataset} (root or fold-level).",
+                file=sys.stderr,
+            )
+            continue
+
         analysis_results.append(
             extract_accuracy_data(
                 moe_model_name,
                 analysis_id,
                 test_biobank,
                 train_biobank=train_biobank,
+                ref_model_biobank=ref_model_biobank,
                 binary_metric=binary_metric,
+                metric_kind=metric_kind,
+                prediction_type=prediction_type,
                 dataset=dataset,
                 exclude_all_group=exclude_all_group,
                 add_training_biobank_to_model_name=add_training_biobank_to_model_name,
+                generate_missing_external=generate_missing_external,
+                external_metric=external_metric,
+                aggregate_single_prs=aggregate_single_prs,
             )
+        )
+
+    if len(analysis_results) == 0:
+        raise FileNotFoundError(
+            "No evaluation metrics were found for the requested analyses: "
+            f"table={analysis_table_id}, biobank={test_biobank}, dataset={dataset}."
         )
 
     df = pd.concat(analysis_results).reset_index(drop=True)
@@ -446,16 +850,27 @@ def extract_accuracy_data(
     analysis_id,
     test_biobank,
     train_biobank=None,
+    ref_model_biobank=None,
     metric="Incremental_R2",
     binary_metric="Nagelkerke_R2",
+    metric_kind="base",
+    prediction_type=None,
     dataset="test_data",
     evaluation_category="Coarse Ancestry",
     exclude_all_group=True,
     add_training_biobank_to_model_name=False,
+    generate_missing_external=False,
+    external_metric=None,
+    aggregate_single_prs=True,
 ):
     # Extract accuracy metrics:
     f = f"data/evaluation/{analysis_id}/{test_biobank}/{dataset}.csv"
-    df = read_transform_eval_metrics(f)
+    df = read_transform_eval_metrics(
+        f,
+        generate_missing_external=generate_missing_external,
+        train_biobank=train_biobank or "ukbb",
+        external_metrics=external_metric,
+    )
 
     df = df.loc[
         (df["model_category"] != "MoE")
@@ -492,9 +907,12 @@ def extract_accuracy_data(
     dfs = postprocess_metrics_df(
         df,
         post_metric,
+        metric_kind=metric_kind,
+        ref_model_biobank=ref_model_biobank,
+        prediction_type=prediction_type,
         category=evaluation_category,
         min_sample_size=50,
-        aggregate_single_prs=True,
+        aggregate_single_prs=aggregate_single_prs,
         add_training_biobank_to_model_name=add_training_biobank_to_model_name,
     )
 
@@ -515,6 +933,7 @@ def reshape_eval_long_to_plot_wide(
     eval_df,
     analysis_id=None,
     metric_kind="base",
+    ref_model_biobank=None,
     model_col="model_name",
     index_cols=None,
 ):
@@ -544,6 +963,15 @@ def reshape_eval_long_to_plot_wide(
                 "metric_kind filtering requested but 'metric_kind' is not in eval_df."
             )
         out = out.loc[out["metric_kind"] == metric_kind].copy()
+
+    if ref_model_biobank is not None:
+        if metric_kind != "incremental_vs_ref":
+            raise ValueError(
+                "ref_model_biobank filtering only applies when "
+                "metric_kind='incremental_vs_ref'."
+            )
+
+        out = _filter_by_ref_model_biobank(out, ref_model_biobank)
 
     name_map = MODEL_NAME_MAP.get(analysis_id, {}) if analysis_id is not None else {}
     out["PGS"] = out[model_col].map(lambda x: name_map.get(x, x))
